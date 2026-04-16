@@ -51,9 +51,13 @@ const StoryboardViewer = ({
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 
   // スマホ・向き判定
-  const [isMobile, setIsMobile] = useState(() =>
-    typeof window !== 'undefined' && window.innerWidth < 768
-  );
+  // screen.width/height は向きに関係ない物理サイズなので、横向き時も正しくスマホ判定できる
+  const checkIsMobile = () => {
+    if (typeof window === 'undefined') return false;
+    const narrowSide = Math.min(window.screen.width, window.screen.height);
+    return narrowSide < 768;
+  };
+  const [isMobile, setIsMobile] = useState(checkIsMobile);
   const [isPortrait, setIsPortrait] = useState(() =>
     typeof window !== 'undefined' && window.innerHeight > window.innerWidth
   );
@@ -89,7 +93,7 @@ const StoryboardViewer = ({
   // スマホ・向き検知
   useEffect(() => {
     const check = () => {
-      setIsMobile(window.innerWidth < 768);
+      setIsMobile(checkIsMobile());
       setIsPortrait(window.innerHeight > window.innerWidth);
     };
     window.addEventListener('resize', check);
