@@ -5,6 +5,14 @@
   text-align: center;
 }
 
+@media (max-width: 767px) {
+  #root {
+    padding: 0;
+    max-width: 100%;
+    text-align: left;
+  }
+}
+
 .logo {
   height: 6em;
   padding: 1.5em;

@@ -775,120 +775,118 @@ const StoryboardViewer = ({
         {isPlaying && flatCuts[currentFrame] && (
           <div style={{
             position: 'fixed',
+            top: 0, left: 0,
+            width: '100vw',
+            height: '100vh',
             zIndex: 9999,
             background: '#000',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            ...(isPortrait ? {
-              width: '100vh',
-              height: '100vw',
-              top: '50%',
-              left: '50%',
-              transform: 'translate(-50%, -50%) rotate(90deg)',
-            } : {
-              top: 0, left: 0, right: 0, bottom: 0,
-              width: '100vw',
-              height: '100vh',
-            })
+            overflow: 'hidden'
           }}>
-            {/* 画像エリア */}
-            <div style={{ flex: 1, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-              {flatCuts[currentFrame].image ? (
-                <img
-                  src={flatCuts[currentFrame].image}
-                  alt={`Frame ${currentFrame + 1}`}
-                  style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
-                />
-              ) : (
-                <div style={{ width: '80%', aspectRatio: '16/9', background: '#111', borderRadius: '8px' }} />
-              )}
+            {/* 画像 - 全画面いっぱい */}
+            {flatCuts[currentFrame].image ? (
+              <img
+                src={flatCuts[currentFrame].image}
+                alt={`Frame ${currentFrame + 1}`}
+                style={{
+                  position: 'absolute',
+                  top: 0, left: 0,
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'contain'
+                }}
+              />
+            ) : (
+              <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: '#111' }} />
+            )}
+
+            {/* フレーム番号（右上） */}
+            <div style={{
+              position: 'absolute',
+              top: '16px', right: '16px',
+              background: 'rgba(0,0,0,0.55)',
+              color: 'white',
+              padding: '4px 12px',
+              borderRadius: '20px',
+              fontSize: '13px',
+              fontWeight: 600
+            }}>
+              {currentFrame + 1} / {totalCuts}
+              {playbackMode === 'auto' && ` · ${parseFloat(flatCuts[currentFrame].timeValue) || 1}秒`}
             </div>
 
-            {/* 情報エリア */}
-            <div style={{ width: '100%', background: 'rgba(0,0,0,0.7)', padding: '8px 16px', textAlign: 'center' }}>
-              {flatCuts[currentFrame].dialogueText && (
-                <div style={{ color: 'white', fontSize: '16px', marginBottom: '4px', lineHeight: 1.4 }}>
-                  {flatCuts[currentFrame].dialogueText}
-                </div>
-              )}
-              <div style={{ color: '#94a3b8', fontSize: '13px' }}>
-                {currentFrame + 1} / {totalCuts}
-                {playbackMode === 'auto' && ` · ${parseFloat(flatCuts[currentFrame].timeValue) || 1}秒`}
+            {/* セリフ（コントロールの上） */}
+            {flatCuts[currentFrame].dialogueText && (
+              <div style={{
+                position: 'absolute',
+                bottom: '90px', left: 0, right: 0,
+                background: 'rgba(0,0,0,0.6)',
+                color: 'white',
+                padding: '10px 20px',
+                textAlign: 'center',
+                fontSize: '16px',
+                lineHeight: 1.5
+              }}>
+                {flatCuts[currentFrame].dialogueText}
               </div>
-            </div>
+            )}
 
-            {/* コントロールエリア */}
-            <div style={{ width: '100%', padding: '12px 16px', background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
+            {/* コントロール - 最下部オーバーレイ */}
+            <div style={{
+              position: 'absolute',
+              bottom: 0, left: 0, right: 0,
+              padding: '16px 24px 28px',
+              background: 'linear-gradient(transparent, rgba(0,0,0,0.75))',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '16px'
+            }}>
               {playbackMode === 'manual' ? (
                 <>
                   <button
                     onClick={() => setCurrentFrame(f => Math.max(0, f - 1))}
                     disabled={currentFrame === 0}
                     style={{
-                      padding: '12px 28px',
-                      background: currentFrame === 0 ? '#374151' : '#3b82f6',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '8px',
-                      fontSize: '20px',
-                      cursor: currentFrame === 0 ? 'not-allowed' : 'pointer',
-                      fontFamily: 'inherit',
-                      transition: 'background 0.2s'
+                      width: '64px', height: '56px',
+                      background: currentFrame === 0 ? 'rgba(55,65,81,0.8)' : 'rgba(59,130,246,0.9)',
+                      color: 'white', border: 'none', borderRadius: '12px',
+                      fontSize: '22px', cursor: currentFrame === 0 ? 'not-allowed' : 'pointer',
+                      fontFamily: 'inherit', backdropFilter: 'blur(4px)'
                     }}
-                  >
-                    ◀
-                  </button>
+                  >◀</button>
                   <button
                     onClick={handleStop}
                     style={{
-                      padding: '12px 20px',
-                      background: '#ef4444',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '8px',
-                      fontSize: '15px',
-                      cursor: 'pointer',
-                      fontFamily: 'inherit'
+                      width: '72px', height: '56px',
+                      background: 'rgba(239,68,68,0.9)',
+                      color: 'white', border: 'none', borderRadius: '12px',
+                      fontSize: '22px', cursor: 'pointer',
+                      fontFamily: 'inherit', backdropFilter: 'blur(4px)'
                     }}
-                  >
-                    ■ 停止
-                  </button>
+                  >■</button>
                   <button
                     onClick={() => setCurrentFrame(f => Math.min(f + 1, totalCuts - 1))}
                     disabled={currentFrame >= totalCuts - 1}
                     style={{
-                      padding: '12px 28px',
-                      background: currentFrame >= totalCuts - 1 ? '#374151' : '#3b82f6',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '8px',
-                      fontSize: '20px',
-                      cursor: currentFrame >= totalCuts - 1 ? 'not-allowed' : 'pointer',
-                      fontFamily: 'inherit',
-                      transition: 'background 0.2s'
+                      width: '64px', height: '56px',
+                      background: currentFrame >= totalCuts - 1 ? 'rgba(55,65,81,0.8)' : 'rgba(59,130,246,0.9)',
+                      color: 'white', border: 'none', borderRadius: '12px',
+                      fontSize: '22px', cursor: currentFrame >= totalCuts - 1 ? 'not-allowed' : 'pointer',
+                      fontFamily: 'inherit', backdropFilter: 'blur(4px)'
                     }}
-                  >
-                    ▶
-                  </button>
+                  >▶</button>
                 </>
               ) : (
                 <button
                   onClick={handleStop}
                   style={{
-                    padding: '12px 32px',
-                    background: '#ef4444',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '8px',
-                    fontSize: '16px',
-                    cursor: 'pointer',
-                    fontFamily: 'inherit'
+                    padding: '14px 40px',
+                    background: 'rgba(239,68,68,0.9)',
+                    color: 'white', border: 'none', borderRadius: '12px',
+                    fontSize: '18px', cursor: 'pointer',
+                    fontFamily: 'inherit', backdropFilter: 'blur(4px)'
                   }}
-                >
-                  ■ 停止
-                </button>
+                >■ 停止</button>
               )}
             </div>
           </div>
@@ -1125,6 +1123,7 @@ const StoryboardViewer = ({
                     >
                       AI
                     </button>
+                    {/* 一時的に非表示: カット削除ボタン (削除)
                     <button
                       onClick={() => {
                         if (window.confirm(`カット ${globalIdx + 1} を削除しますか？`)) {
@@ -1140,6 +1139,7 @@ const StoryboardViewer = ({
                     >
                       削除
                     </button>
+                    */}
                   </div>
                 </div>
 
@@ -1265,7 +1265,9 @@ const StoryboardViewer = ({
                       padding: '6px 10px', fontSize: '13px',
                       resize: 'vertical', outline: 'none',
                       fontFamily: 'inherit', lineHeight: 1.5,
-                      background: '#f8fafc'
+                      background: '#f8fafc',
+                      color: '#111',
+                      fontWeight: 600
                     }}
                   />
 
@@ -1281,7 +1283,9 @@ const StoryboardViewer = ({
                         padding: '6px 10px', fontSize: '13px',
                         resize: 'vertical', outline: 'none',
                         fontFamily: 'inherit', lineHeight: 1.5,
-                        background: '#f8fafc'
+                        background: '#f8fafc',
+                        color: '#111',
+                        fontWeight: 600
                       }}
                     />
                     <button
@@ -1319,21 +1323,46 @@ const StoryboardViewer = ({
                         border: '1px solid #e2e8f0', borderRadius: '6px',
                         padding: '5px 8px', fontSize: '13px',
                         textAlign: 'center', outline: 'none',
-                        fontFamily: 'inherit', background: '#f8fafc'
+                        fontFamily: 'inherit', background: '#f8fafc',
+                        color: '#111',
+                        fontWeight: 600
                       }}
                     />
-                    <button
-                      onClick={() => handleAddCutAt(pageIdx, cutIdx)}
-                      style={{
-                        marginLeft: 'auto',
-                        padding: '5px 10px', fontSize: '12px',
-                        background: '#ede9fe', color: '#6d28d9',
-                        border: '1px solid #c4b5fd', borderRadius: '6px',
-                        cursor: 'pointer', fontFamily: 'inherit'
-                      }}
-                    >
-                      + 前に挿入
-                    </button>
+                    {/* 順番移動ボタン */}
+                    <div style={{ marginLeft: 'auto', display: 'flex', gap: '4px' }}>
+                      <button
+                        type="button"
+                        onClick={() => handleMoveCut(pageIdx, cutIdx, -1)}
+                        disabled={globalIdx === 0}
+                        style={{
+                          width: '36px', height: '36px',
+                          background: globalIdx === 0 ? '#e2e8f0' : '#dbeafe',
+                          color: globalIdx === 0 ? '#94a3b8' : '#1d4ed8',
+                          border: `1px solid ${globalIdx === 0 ? '#cbd5e1' : '#93c5fd'}`,
+                          borderRadius: '6px', fontSize: '16px',
+                          cursor: globalIdx === 0 ? 'not-allowed' : 'pointer',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          padding: 0, fontFamily: 'inherit'
+                        }}
+                        title="上に移動"
+                      >↑</button>
+                      <button
+                        type="button"
+                        onClick={() => handleMoveCut(pageIdx, cutIdx, 1)}
+                        disabled={globalIdx >= totalCuts - 1}
+                        style={{
+                          width: '36px', height: '36px',
+                          background: globalIdx >= totalCuts - 1 ? '#e2e8f0' : '#dbeafe',
+                          color: globalIdx >= totalCuts - 1 ? '#94a3b8' : '#1d4ed8',
+                          border: `1px solid ${globalIdx >= totalCuts - 1 ? '#cbd5e1' : '#93c5fd'}`,
+                          borderRadius: '6px', fontSize: '16px',
+                          cursor: globalIdx >= totalCuts - 1 ? 'not-allowed' : 'pointer',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          padding: 0, fontFamily: 'inherit'
+                        }}
+                        title="下に移動"
+                      >↓</button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1671,19 +1700,23 @@ const StoryboardViewer = ({
                             <AIAssistButton pageIdx={pageIdx} cutIdx={cutIdx} onAIAssist={handleAIAssist} />
                           )}
 
+                          {/* 一時的に非表示: このカットを削除ボタン (✕)
                           {!isExportingPDF && !areButtonsHidden && (
                             <button type="button"
                               onClick={e => { e.stopPropagation(); handleDeleteCut(pageIdx, cutIdx); }}
                               style={{ position: 'absolute', top: '130px', right: '-280px', width: '22px', height: '22px', background: '#ef4444', color: 'white', border: 'none', borderRadius: '50%', fontSize: '14px', cursor: 'pointer', zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
                               title="このカットを削除">✕</button>
                           )}
+                          */}
 
+                          {/* 一時的に非表示: ここにカットを追加ボタン (＋ カット間)
                           {!isExportingPDF && !areButtonsHidden && (
                             <button type="button"
                               onClick={() => { handleAddCutAt(pageIdx, cutIdx); }}
                               style={{ position: 'absolute', right: '-210px', top: '-5%', transform: 'translateY(-50%)', zIndex: 1000, width: '24px', height: '24px', background: 'none', border: 'none', color: '#3730a3', fontSize: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, boxShadow: 'none' }}
                               title="ここにカットを追加">＋</button>
                           )}
+                          */}
 
                           {!isExportingPDF && !areButtonsHidden && (
                             <>
@@ -1719,6 +1752,7 @@ const StoryboardViewer = ({
                       </div>
                     ))}
 
+                    {/* 一時的に非表示: ここにカットを追加ボタン (＋ 行末)
                     {!isExportingPDF && !areButtonsHidden && (
                       <div style={{ position: 'relative', height: 0 }}>
                         <button type="button"
@@ -1728,6 +1762,7 @@ const StoryboardViewer = ({
                           disabled={page.images.length >= 5}>＋</button>
                       </div>
                     )}
+                    */}
                   </div>
                 </div>
 
