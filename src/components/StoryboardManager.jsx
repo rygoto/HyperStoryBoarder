@@ -171,12 +171,15 @@ const StoryboardManager = () => {
       <div>
         {/* ヘッダー */}
         <div style={{
-          padding: '12px 16px',
+          padding: '8px 16px',
           backgroundColor: '#f8f9fa',
           borderBottom: '1px solid #e0e0e0',
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'center'
+          alignItems: 'center',
+          position: 'sticky',
+          top: '34px',
+          zIndex: 950
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <button

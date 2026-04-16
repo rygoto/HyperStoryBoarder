@@ -102,7 +102,7 @@ function App() {
       <header style={{
         backgroundColor: 'white',
         borderBottom: '1px solid #e0e0e0',
-        padding: '8px 16px',
+        padding: '4px 12px',
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
@@ -110,14 +110,14 @@ function App() {
         top: 0,
         zIndex: 1000
       }}>
-        <h1 style={{
-          margin: 0,
-          fontSize: '20px',
+        <span style={{
+          fontSize: '13px',
           fontWeight: '600',
-          color: '#333'
+          color: '#555',
+          letterSpacing: '0.02em'
         }}>
           Piyopiyo StoryBoard
-        </h1>
+        </span>
         <LoginButton />
       </header>
       <StoryboardManager />

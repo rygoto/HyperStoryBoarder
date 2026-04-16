@@ -32,41 +32,31 @@ const LoginButton = () => {
       <div style={{
         display: 'flex',
         alignItems: 'center',
-        gap: '12px',
-        padding: '8px 16px',
-        backgroundColor: '#f8f9fa',
-        borderRadius: '8px',
-        fontSize: '14px'
+        gap: '6px',
       }}>
         <img
           src={user.photoURL}
-          alt="Profile"
+          alt={user.displayName}
+          title={`${user.displayName}\n${user.email}`}
           style={{
-            width: '32px',
-            height: '32px',
+            width: '26px',
+            height: '26px',
             borderRadius: '50%',
             border: '2px solid #e0e0e0'
           }}
         />
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <span style={{ fontWeight: '500', color: '#333' }}>
-            {user.displayName}
-          </span>
-          <span style={{ fontSize: '12px', color: '#666' }}>
-            {user.email}
-          </span>
-        </div>
         <button
           onClick={signOut}
           style={{
-            padding: '6px 12px',
+            padding: '3px 8px',
             backgroundColor: '#dc3545',
             color: 'white',
             border: 'none',
             borderRadius: '4px',
-            fontSize: '12px',
+            fontSize: '11px',
             cursor: 'pointer',
-            transition: 'background-color 0.2s'
+            transition: 'background-color 0.2s',
+            lineHeight: 1.4
           }}
           onMouseOver={(e) => e.target.style.backgroundColor = '#c82333'}
           onMouseOut={(e) => e.target.style.backgroundColor = '#dc3545'}
