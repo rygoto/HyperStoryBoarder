@@ -302,6 +302,33 @@ const StoryboardViewer = ({
     }
   };
 
+  const handleFolderChange = (pageIdx, cutIdx, files) => {
+    if (files && files.length > 0) {
+      let folderPath;
+      if (window.webUtils && window.webUtils.getPathForFile) {
+        const fullPath = window.webUtils.getPathForFile(files[0]);
+        const sep = fullPath.includes('/') ? '/' : '\\';
+        const parts = fullPath.split(sep);
+        parts.pop();
+        folderPath = parts.join(sep);
+      } else {
+        const relativePath = files[0].webkitRelativePath || '';
+        folderPath = relativePath.split('/')[0] || files[0].name;
+      }
+
+      setPages(prev => {
+        const newPages = [...prev];
+        newPages[pageIdx] = {
+          ...newPages[pageIdx],
+          blendFiles: newPages[pageIdx].blendFiles.map((b, idx) =>
+            idx === cutIdx ? folderPath : b
+          )
+        };
+        return newPages;
+      });
+    }
+  };
+
   // 全ページ・全カットをフラットにまとめる
   const flatCuts = pages.flatMap((page, pageIdx) =>
     [0, 1, 2, 3, 4].map(cutIdx => {
@@ -1172,6 +1199,25 @@ const StoryboardViewer = ({
                   </span>
                   <span style={{ marginLeft: '6px', fontSize: '10px', color: '#94a3b8' }}>長押しで並び替え</span>
                   <div style={{ marginLeft: 'auto', display: 'flex', gap: '6px' }}>
+                    {/* 画像追加ボタン */}
+                    <button
+                      onClick={() => {
+                        const input = document.createElement('input');
+                        input.type = 'file';
+                        input.accept = 'image/jpeg, image/png';
+                        input.onchange = (ev) => handleImageUpload(pageIdx, cutIdx, ev, true);
+                        input.click();
+                      }}
+                      style={{
+                        padding: '4px 8px', fontSize: '13px',
+                        background: '#10b981', color: 'white',
+                        border: 'none', borderRadius: '5px',
+                        cursor: 'pointer', fontFamily: 'inherit'
+                      }}
+                      title="画像を追加"
+                    >
+                      +
+                    </button>
                     {/* 画像クリアボタン（画像がある場合のみ） */}
                     {cutImages.some(img => img !== null) && (
                       <button
@@ -1197,21 +1243,6 @@ const StoryboardViewer = ({
                       }}
                     >
                       AI
-                    </button>
-                    <button
-                      onClick={() => {
-                        if (window.confirm(`カット ${globalIdx + 1} を削除しますか？`)) {
-                          handleDeleteCut(pageIdx, cutIdx);
-                        }
-                      }}
-                      style={{
-                        padding: '4px 8px', fontSize: '11px',
-                        background: '#fee2e2', color: '#dc2626',
-                        border: '1px solid #fca5a5', borderRadius: '5px',
-                        cursor: 'pointer', fontFamily: 'inherit'
-                      }}
-                    >
-                      削除
                     </button>
                   </div>
                 </div>
@@ -1281,47 +1312,6 @@ const StoryboardViewer = ({
                       </>
                     )}
 
-                    {/* 画像追加ボタン */}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const input = document.createElement('input');
-                        input.type = 'file';
-                        input.accept = 'image/jpeg, image/png';
-                        input.onchange = (ev) => handleImageUpload(pageIdx, cutIdx, ev, true);
-                        input.click();
-                      }}
-                      style={{
-                        position: 'absolute', top: '8px', right: '8px',
-                        width: '30px', height: '30px',
-                        background: '#10b981', color: 'white',
-                        border: 'none', borderRadius: '50%', fontSize: '18px',
-                        cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
-                        zIndex: 2
-                      }}
-                      title="画像を追加"
-                    >+</button>
-
-                    {/* 画像削除ボタン */}
-                    {currentImage && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (window.confirm('この画像を削除しますか？')) {
-                            handleDeleteCurrentImage(pageIdx, cutIdx);
-                          }
-                        }}
-                        style={{
-                          position: 'absolute', top: '8px', left: '8px',
-                          width: '30px', height: '30px',
-                          background: '#ef4444', color: 'white',
-                          border: 'none', borderRadius: '50%', fontSize: '16px',
-                          cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
-                          zIndex: 2
-                        }}
-                        title="この画像を削除"
-                      >×</button>
-                    )}
                   </div>
                 </div>
 
@@ -1838,25 +1828,35 @@ const StoryboardViewer = ({
 
                           {!isExportingPDF && !areButtonsHidden && (
                             <>
-                              <input type="file" accept=".blend" style={{ display: 'none' }}
+                              <input type="file" style={{ display: 'none' }}
                                 id={`blend-input-${pageIdx}-${cutIdx}`}
                                 onClick={(e) => e.stopPropagation()}
                                 onChange={e => { if (e.target.files && e.target.files[0]) { handleBlendFileChange(pageIdx, cutIdx, e.target.files[0]); } }} />
+                              <input type="file" webkitdirectory="" style={{ display: 'none' }}
+                                id={`folder-input-${pageIdx}-${cutIdx}`}
+                                onClick={(e) => e.stopPropagation()}
+                                onChange={e => { if (e.target.files && e.target.files.length > 0) { handleFolderChange(pageIdx, cutIdx, e.target.files); e.target.value = ''; } }} />
                               <label htmlFor={`blend-input-${pageIdx}-${cutIdx}`}
-                                title={page.blendFiles[cutIdx] ? `紐付け: ${page.blendFiles[cutIdx]}` : '.blendファイルを紐付け'}
+                                title={page.blendFiles[cutIdx] ? `紐付け: ${page.blendFiles[cutIdx]}` : 'ファイルを紐付け'}
                                 style={{ position: 'absolute', right: '-18px', bottom: '140px', width: '20px', height: '20px', background: page.blendFiles[cutIdx] ? '#10b981' : '#e5e7eb', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 1px 4px rgba(0,0,0,0.08)', cursor: 'pointer', border: '1px solid #d1d5db', zIndex: 2 }}
                                 onClick={(e) => e.stopPropagation()}>
                                 <span style={{ fontSize: '12px', color: page.blendFiles[cutIdx] ? 'white' : '#6b7280' }}>🗎</span>
                               </label>
+                              <label htmlFor={`folder-input-${pageIdx}-${cutIdx}`}
+                                title="フォルダを紐付け"
+                                style={{ position: 'absolute', right: '-18px', bottom: '116px', width: '20px', height: '20px', background: '#e5e7eb', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 1px 4px rgba(0,0,0,0.08)', cursor: 'pointer', border: '1px solid #d1d5db', zIndex: 2 }}
+                                onClick={(e) => e.stopPropagation()}>
+                                <span style={{ fontSize: '12px', color: '#6b7280' }}>📁</span>
+                              </label>
                               {page.blendFiles[cutIdx] && (
-                                <label title="紐付けたファイルを開く"
+                                <label title="紐付けたファイル/フォルダを開く"
                                   style={{ position: 'absolute', right: '-18px', bottom: '4px', width: '20px', height: '20px', background: '#3b82f6', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 1px 4px rgba(0,0,0,0.08)', cursor: 'pointer', border: '1px solid #d1d5db', zIndex: 2 }}
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     if (window.webUtils && window.webUtils.openFile) {
                                       window.webUtils.openFile(page.blendFiles[cutIdx]);
                                     } else {
-                                      alert(`ファイルを開く機能は現在利用できません。\n\n紐付けファイル: ${page.blendFiles[cutIdx]}`);
+                                      alert(`ファイルを開く機能は現在利用できません。\n\n紐付け先: ${page.blendFiles[cutIdx]}`);
                                     }
                                   }}>
                                   <span style={{ fontSize: '14px', color: 'white' }}>🔗</span>
