@@ -773,7 +773,12 @@ const StoryboardViewer = ({
     );
 
     return (
-      <div style={{ minHeight: '100vh', backgroundColor: '#f1f5f9', fontFamily: 'inherit' }}>
+      <div style={{
+        display: 'flex', flexDirection: 'column',
+        height: 'calc(100vh - 82px)',
+        backgroundColor: '#f1f5f9', fontFamily: 'inherit',
+        overflow: 'hidden'
+      }}>
 
         {/* ---- モバイル全画面再生オーバーレイ ---- */}
         {isPlaying && flatCuts[currentFrame] && (
@@ -957,7 +962,7 @@ const StoryboardViewer = ({
 
         {/* ---- トップバー ---- */}
         <div style={{
-          position: 'sticky', top: 0, zIndex: 100,
+          flexShrink: 0,
           background: '#1e293b',
           padding: '10px 12px',
           display: 'flex', alignItems: 'center', gap: '8px',
@@ -1007,10 +1012,12 @@ const StoryboardViewer = ({
 
         {/* ---- 再生コントロールバー ---- */}
         <div style={{
+          flexShrink: 0,
           background: 'white',
           borderBottom: '1px solid #e2e8f0',
           padding: '10px 12px',
-          display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap'
+          display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.06)'
         }}>
           {/* 再生モード */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -1081,7 +1088,12 @@ const StoryboardViewer = ({
         </div>
 
         {/* ---- カットリスト ---- */}
-        <div style={{ padding: '12px 10px 80px' }}>
+        <div style={{
+          flex: 1,
+          overflowY: 'auto',
+          WebkitOverflowScrolling: 'touch',
+          padding: '12px 10px 40px'
+        }}>
           {globalCuts.map(({ page, pageIdx, cutIdx, globalIdx }) => {
             const cutImages = page.images[cutIdx];
             const currentImgIdx = page.imageIndices[cutIdx];
@@ -1409,8 +1421,19 @@ const StoryboardViewer = ({
   // =========================================================
   return (
     <div style={styles.container}>
+      {/* ---- デスクトップ スティッキーコントロールバー ---- */}
+      <div style={{
+        position: 'sticky',
+        top: '82px',
+        zIndex: 890,
+        backgroundColor: '#f3f4f6',
+        paddingTop: '8px',
+        paddingBottom: '4px',
+        borderBottom: '1px solid #e5e7eb',
+        marginBottom: '4px'
+      }}>
       {/* PDF保存ボタンとストップウォッチを横並びに */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '16px', margin: '16px 0' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '6px' }}>
         <ExportPDFButton targetRef={exportRef} pageRefs={pageRefs} pages={pages} setIsExportingPDF={setIsExportingPDF} />
         
         {/* ボタン表示切り替えボタン */}
@@ -1544,6 +1567,7 @@ const StoryboardViewer = ({
           セリフも自動再生する
         </label>
       </div>
+      </div>{/* /スティッキーコントロールバー */}
 
       {/* デスクトップ: 再生中の大きな表示 */}
       {isPlaying && flatCuts[currentFrame] && (
