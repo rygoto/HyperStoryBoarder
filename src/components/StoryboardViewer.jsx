@@ -7,8 +7,8 @@ import { useStoryboard } from '../hooks/useStoryboard';
 import { uploadImage, isBase64DataURL, migrateBase64ToStorage } from '../services/storage-service';
 
 const EMPTY_PAGE = () => ({
-  images: [[null], [null], [null], [null], [null]], // 各カットに複数画像を持てるよう配列の配列に
-  imageIndices: [0, 0, 0, 0, 0], // 各カットで現在表示中の画像インデックス
+  images: [[null], [null], [null], [null], [null]],
+  imageIndices: [0, 0, 0, 0, 0],
   faceTexts: ['', '', '', '', ''],
   dialogueTexts: ['', '', '', '', ''],
   timeValues: ['', '', '', '', ''],
@@ -21,13 +21,13 @@ const StoryboardViewer = ({
   storyboardName: initialName = '' 
 }) => {
   const { user } = useAuth();
-  const { saveStoryboard } = useStoryboard();
+  const { saveStoryboard, saving, lastSaved } = useStoryboard();
   
   const [pages, setPages] = useState(initialPages);
   const exportRef = useRef(null);
-  const pageRefs = useRef([]); // 各ページごとのref
+  const pageRefs = useRef([]);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [playbackMode, setPlaybackMode] = useState('auto'); // 'auto' | 'manual'
+  const [playbackMode, setPlaybackMode] = useState('auto');
   const [currentFrame, setCurrentFrame] = useState(0);
   const [isAutoSpeak, setIsAutoSpeak] = useState(false);
   const [hoveredFrame, setHoveredFrame] = useState(null);
@@ -36,16 +36,31 @@ const StoryboardViewer = ({
   const [stopwatchTime, setStopwatchTime] = useState(null);
   const [storyboardName, setStoryboardName] = useState(initialName);
   const [draggedCut, setDraggedCut] = useState(null);
-  const [isExportingPDF, setIsExportingPDF] = useState(false); // PDFエクスポート中フラグ
-  const [areButtonsHidden, setAreButtonsHidden] = useState(false); // ボタン非表示フラグ
-  
+  const [isExportingPDF, setIsExportingPDF] = useState(false);
+  const [areButtonsHidden, setAreButtonsHidden] = useState(false);
+
   // AI補助機能用のstate
   const [aiPanelVisible, setAiPanelVisible] = useState(false);
   const [selectedAIFrame, setSelectedAIFrame] = useState(null);
-  
+
   // Firebase Storage関連のstate
   const [uploadingImages, setUploadingImages] = useState(new Set());
   const [imageUploadProgress, setImageUploadProgress] = useState({});
+
+  // 未保存変更の追跡
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+
+  // スマホ・向き判定
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== 'undefined' && window.innerWidth < 768
+  );
+  const [isPortrait, setIsPortrait] = useState(() =>
+    typeof window !== 'undefined' && window.innerHeight > window.innerWidth
+  );
+
+  // 長押し関連
+  const [longPressTarget, setLongPressTarget] = useState(null);
+  const longPressTimer = useRef(null);
 
   // 初期データの同期
   useEffect(() => {
@@ -61,26 +76,36 @@ const StoryboardViewer = ({
     }
   }, [initialName]);
 
-  // 自動保存機能（ページデータが変更された時）
+  // ページデータまたは名前が変更されたら未保存フラグを立てる
   useEffect(() => {
     if (storyboardId && user && pages.length > 0) {
-      // 初期データと同じ場合はスキップ
-      if (JSON.stringify(pages) === JSON.stringify(initialPages)) {
+      if (JSON.stringify(pages) === JSON.stringify(initialPages) && storyboardName === initialName) {
         return;
       }
-      
-      console.log('ページデータ変更を検知、自動保存を実行');
-      saveStoryboard(storyboardId, pages, storyboardName);
+      setHasUnsavedChanges(true);
     }
-  }, [pages, storyboardId, user, saveStoryboard]);
+  }, [pages, storyboardName]);
 
-  // ストーリーボード名が変更された時の自動保存
+  // スマホ・向き検知
   useEffect(() => {
-    if (storyboardId && user && storyboardName !== initialName) {
-      console.log('ストーリーボード名変更を検知、自動保存を実行');
-      saveStoryboard(storyboardId, pages, storyboardName);
-    }
-  }, [storyboardName, storyboardId, user, pages, saveStoryboard, initialName]);
+    const check = () => {
+      setIsMobile(window.innerWidth < 768);
+      setIsPortrait(window.innerHeight > window.innerWidth);
+    };
+    window.addEventListener('resize', check);
+    window.addEventListener('orientationchange', check);
+    return () => {
+      window.removeEventListener('resize', check);
+      window.removeEventListener('orientationchange', check);
+    };
+  }, []);
+
+  // 手動保存ハンドラー
+  const handleManualSave = () => {
+    if (!storyboardId || !user) return;
+    saveStoryboard(storyboardId, pages, storyboardName);
+    setHasUnsavedChanges(false);
+  };
 
   // ページ・カット指定で画像アップロード（Firebase Storage版）
   const handleImageUpload = async (pageIdx, cutIdx, event, addNew = false) => {
@@ -95,17 +120,12 @@ const StoryboardViewer = ({
     const uploadKey = `${pageIdx}-${cutIdx}`;
     
     try {
-      // アップロード開始
       setUploadingImages(prev => new Set(prev).add(uploadKey));
       setImageUploadProgress(prev => ({ ...prev, [uploadKey]: 0 }));
 
-      // Firebase Storageにアップロード
       const frameId = `page${pageIdx}_cut${cutIdx}_${Date.now()}`;
       const uploadResult = await uploadImage(file, user.uid, frameId);
 
-      console.log('画像アップロード完了:', uploadResult);
-
-      // ページ状態を更新
       setPages(prev => {
         const newPages = [...prev];
         const page = newPages[pageIdx];
@@ -113,7 +133,6 @@ const StoryboardViewer = ({
         const currentIdx = page.imageIndices[cutIdx];
         
         if (addNew) {
-          // 新規追加：配列の最後に追加し、そのインデックスに移動
           cutImages.push(uploadResult.url);
           const newImageIndices = [...page.imageIndices];
           newImageIndices[cutIdx] = cutImages.length - 1;
@@ -123,12 +142,7 @@ const StoryboardViewer = ({
             imageIndices: newImageIndices
           };
         } else {
-          // 現在の画像を置き換え（nullの場合は最初の要素に）
-          if (cutImages[currentIdx] === null) {
-            cutImages[currentIdx] = uploadResult.url;
-          } else {
-            cutImages[currentIdx] = uploadResult.url;
-          }
+          cutImages[currentIdx] = uploadResult.url;
           newPages[pageIdx] = {
             ...page,
             images: page.images.map((imgs, idx) => idx === cutIdx ? cutImages : imgs)
@@ -143,7 +157,6 @@ const StoryboardViewer = ({
       console.error('画像アップロードエラー:', error);
       alert(`画像アップロードに失敗しました: ${error.message}`);
     } finally {
-      // アップロード終了
       setUploadingImages(prev => {
         const newSet = new Set(prev);
         newSet.delete(uploadKey);
@@ -159,7 +172,7 @@ const StoryboardViewer = ({
     }
   };
 
-  // 画像インデックスを変更（左右ボタン用）
+  // 画像インデックスを変更
   const handleChangeImageIndex = (pageIdx, cutIdx, direction) => {
     setPages(prev => {
       const newPages = [...prev];
@@ -168,7 +181,6 @@ const StoryboardViewer = ({
       const currentIdx = page.imageIndices[cutIdx];
       
       let newIdx = currentIdx + direction;
-      // ループ処理
       if (newIdx < 0) newIdx = cutImages.length - 1;
       if (newIdx >= cutImages.length) newIdx = 0;
       
@@ -190,7 +202,6 @@ const StoryboardViewer = ({
       const cutImages = [...page.images[cutIdx]];
       const currentIdx = page.imageIndices[cutIdx];
       
-      // 画像が1枚しかない場合はnullに置き換え
       if (cutImages.filter(img => img !== null).length <= 1) {
         cutImages[currentIdx] = null;
         newPages[pageIdx] = {
@@ -198,7 +209,6 @@ const StoryboardViewer = ({
           images: page.images.map((imgs, idx) => idx === cutIdx ? cutImages : imgs)
         };
       } else {
-        // 複数ある場合は削除して前のインデックスに移動
         cutImages.splice(currentIdx, 1);
         const newIdx = Math.max(0, Math.min(currentIdx, cutImages.length - 1));
         const newImageIndices = [...page.imageIndices];
@@ -215,11 +225,9 @@ const StoryboardViewer = ({
 
   // ページ・カット指定で画像選択
   const handleFrameClick = (pageIdx, cutIdx, event) => {
-    // blendファイルボタン（label要素またはその中のspan）がクリックされた場合は処理しない
     const clickedElement = event.target;
     const blendInputId = `blend-input-${pageIdx}-${cutIdx}`;
 
-    // クリックされた要素がlabel自体、またはその子要素（span）、またはhidden input自体であればスキップ
     if (clickedElement.id === blendInputId ||
       (clickedElement.tagName === 'LABEL' && clickedElement.htmlFor === blendInputId) ||
       clickedElement.closest(`label[for="${blendInputId}"]`)) {
@@ -233,7 +241,6 @@ const StoryboardViewer = ({
     input.click();
   };
 
-  // ページ・カット指定でテキスト変更
   const handleTextChange = (pageIdx, cutIdx, value) => {
     setPages(prev => {
       const newPages = [...prev];
@@ -245,7 +252,6 @@ const StoryboardViewer = ({
     });
   };
 
-  // ページ・カット指定でセリフ変更
   const handleDialogueChange = (pageIdx, cutIdx, value) => {
     setPages(prev => {
       const newPages = [...prev];
@@ -257,7 +263,6 @@ const StoryboardViewer = ({
     });
   };
 
-  // ページ・カット指定で時間変更
   const handleTimeChange = (pageIdx, cutIdx, value) => {
     if (value === '' || /^\d*\.?\d*$/.test(value)) {
       setPages(prev => {
@@ -271,18 +276,14 @@ const StoryboardViewer = ({
     }
   };
 
-  // blendファイル紐付け
   const handleBlendFileChange = (pageIdx, cutIdx, file) => {
     if (file) {
-      // Electron環境ではフルパス、Web環境ではファイル名のみを取得
       let filePath;
       if (window.webUtils && window.webUtils.getPathForFile) {
         filePath = window.webUtils.getPathForFile(file);
       } else {
-        // Web環境ではファイル名のみ保存
         filePath = file.name;
       }
-      console.log('blendファイル紐付け:', filePath);
 
       setPages(prev => {
         const newPages = [...prev];
@@ -296,6 +297,7 @@ const StoryboardViewer = ({
       });
     }
   };
+
   // 全ページ・全カットをフラットにまとめる
   const flatCuts = pages.flatMap((page, pageIdx) =>
     [0, 1, 2, 3, 4].map(cutIdx => {
@@ -327,7 +329,7 @@ const StoryboardViewer = ({
     if (window.speechSynthesis) window.speechSynthesis.cancel();
   };
 
-  // 自動送り（全ページ対応）
+  // 自動送り
   useEffect(() => {
     if (!isPlaying) return;
     if (playbackMode !== 'auto') return;
@@ -344,7 +346,7 @@ const StoryboardViewer = ({
     return () => clearTimeout(timer);
   }, [isPlaying, playbackMode, currentFrame, flatCuts, totalCuts]);
 
-  // セリフ自動再生（自動/手動共通）
+  // セリフ自動再生
   useEffect(() => {
     if (!isPlaying) return;
     if (!isAutoSpeak) return;
@@ -359,16 +361,11 @@ const StoryboardViewer = ({
     window.speechSynthesis.speak(utter);
 
     return () => {
-      // 次の発話や停止時にキャンセルされるが、念のため
-      try {
-        window.speechSynthesis.cancel();
-      } catch {
-        // ignore
-      }
+      try { window.speechSynthesis.cancel(); } catch { /* ignore */ }
     };
   }, [isPlaying, isAutoSpeak, currentFrame, flatCuts]);
 
-  // 手動再生: 矢印キーでフレーム移動
+  // 手動再生: キーボード操作
   useEffect(() => {
     if (!isPlaying) return;
     if (playbackMode !== 'manual') return;
@@ -383,7 +380,6 @@ const StoryboardViewer = ({
 
     const onKeyDown = (e) => {
       if (isTypingTarget(e.target)) return;
-
       if (e.key === 'ArrowRight') {
         e.preventDefault();
         setCurrentFrame((prev) => Math.min(prev + 1, Math.max(0, totalCuts - 1)));
@@ -421,13 +417,10 @@ const StoryboardViewer = ({
       const data = localStorage.getItem('storyboardPages');
       if (data) {
         const loadedPages = JSON.parse(data);
-        // 古い形式から新しい形式に変換
         const convertedPages = loadedPages.map(page => {
-          // 古い形式（images が単一の値の配列）を検出
           if (page.images && Array.isArray(page.images) && page.images.length > 0) {
             const isOldFormat = !Array.isArray(page.images[0]);
             if (isOldFormat) {
-              // 古い形式を新しい形式に変換
               return {
                 ...page,
                 images: page.images.map(img => [img]),
@@ -435,11 +428,7 @@ const StoryboardViewer = ({
               };
             }
           }
-          // すでに新しい形式の場合はそのまま
-          return {
-            ...page,
-            imageIndices: page.imageIndices || [0, 0, 0, 0, 0]
-          };
+          return { ...page, imageIndices: page.imageIndices || [0, 0, 0, 0, 0] };
         });
         setPages(convertedPages);
         alert('読み込みました！');
@@ -451,7 +440,7 @@ const StoryboardViewer = ({
     }
   };
 
-  // ストップウォッチのクリックハンドラ
+  // ストップウォッチ
   const handleStopwatchClick = () => {
     if (!isStopwatchRunning) {
       setIsStopwatchRunning(true);
@@ -469,27 +458,19 @@ const StoryboardViewer = ({
   // Fキーでボタン表示切り替え
   useEffect(() => {
     const handleKeyPress = (e) => {
-      // 入力中の場合はスキップ（textareaやinputにフォーカスがある場合）
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
-        return;
-      }
-      
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
       if (e.key === 'f' || e.key === 'F') {
         e.preventDefault();
         setAreButtonsHidden(prev => !prev);
       }
     };
-
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
   }, []);
 
   // JSONエクスポート
   const handleExport = () => {
-    const data = {
-      name: storyboardName,
-      pages: pages
-    };
+    const data = { name: storyboardName, pages: pages };
     const dataStr = JSON.stringify(data, null, 2);
     const blob = new Blob([dataStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -519,13 +500,10 @@ const StoryboardViewer = ({
           setStoryboardName('');
         }
         
-        // 古い形式から新しい形式に変換
         const convertedPages = pagesData.map(page => {
-          // 古い形式（images が単一の値の配列）を検出
           if (page.images && Array.isArray(page.images) && page.images.length > 0) {
             const isOldFormat = !Array.isArray(page.images[0]);
             if (isOldFormat) {
-              // 古い形式を新しい形式に変換
               return {
                 ...page,
                 images: page.images.map(img => [img]),
@@ -533,11 +511,7 @@ const StoryboardViewer = ({
               };
             }
           }
-          // すでに新しい形式の場合はそのまま
-          return {
-            ...page,
-            imageIndices: page.imageIndices || [0, 0, 0, 0, 0]
-          };
+          return { ...page, imageIndices: page.imageIndices || [0, 0, 0, 0, 0] };
         });
         
         setPages(convertedPages);
@@ -581,14 +555,13 @@ const StoryboardViewer = ({
     setPages(prev => {
       let newPages = [...prev];
       let page = { ...newPages[pageIdx] };
-      // 各配列に空要素を挿入
       page.images = [...page.images];
       page.imageIndices = [...page.imageIndices];
       page.faceTexts = [...page.faceTexts];
       page.dialogueTexts = [...page.dialogueTexts];
       page.timeValues = [...page.timeValues];
       page.blendFiles = [...page.blendFiles];
-      // 挿入
+
       page.images.splice(insertIdx, 0, [null]);
       page.imageIndices.splice(insertIdx, 0, 0);
       page.faceTexts.splice(insertIdx, 0, '');
@@ -596,7 +569,6 @@ const StoryboardViewer = ({
       page.timeValues.splice(insertIdx, 0, '');
       page.blendFiles.splice(insertIdx, 0, '');
 
-      // 空でないカットのみをカウント
       const isFilled = (i) => {
         const hasImage = page.images[i] && page.images[i].some(img => img !== null);
         return (
@@ -608,26 +580,14 @@ const StoryboardViewer = ({
         );
       };
 
-      // 空でないカットのインデックスを取得
       let filledIndexes = [];
       for (let i = 0; i < page.images.length; i++) {
         if (isFilled(i)) filledIndexes.push(i);
       }
 
-      // 6つ以上の空でないカットがある場合のみ分割
       while (filledIndexes.length > 5) {
-        // 6つ目以降のfilledIndexesを取得
         const overflowIndexes = filledIndexes.slice(5);
-        // 溢れた分を抽出
-        const overflow = {
-          images: [],
-          imageIndices: [],
-          faceTexts: [],
-          dialogueTexts: [],
-          timeValues: [],
-          blendFiles: []
-        };
-        // 溢れた分をoverflowに格納し、元ページから削除
+        const overflow = { images: [], imageIndices: [], faceTexts: [], dialogueTexts: [], timeValues: [], blendFiles: [] };
         for (let i = overflowIndexes.length - 1; i >= 0; i--) {
           const idx = overflowIndexes[i];
           overflow.images.unshift(page.images.splice(idx, 1)[0]);
@@ -637,7 +597,6 @@ const StoryboardViewer = ({
           overflow.timeValues.unshift(page.timeValues.splice(idx, 1)[0]);
           overflow.blendFiles.unshift(page.blendFiles.splice(idx, 1)[0]);
         }
-        // 次ページが存在するか
         if (newPages[pageIdx + 1]) {
           let nextPage = { ...newPages[pageIdx + 1] };
           nextPage.images = [...overflow.images, ...nextPage.images];
@@ -647,16 +606,13 @@ const StoryboardViewer = ({
           nextPage.timeValues = [...overflow.timeValues, ...nextPage.timeValues];
           nextPage.blendFiles = [...overflow.blendFiles, ...nextPage.blendFiles];
           newPages[pageIdx + 1] = nextPage;
-          // 次ページも再帰的に処理
           pageIdx = pageIdx + 1;
           page = nextPage;
-          // filledIndexesを再計算
           filledIndexes = [];
           for (let i = 0; i < page.images.length; i++) {
             if (isFilled(i)) filledIndexes.push(i);
           }
         } else {
-          // 新しいページを作成
           const EMPTY = () => ({
             images: [[null], [null], [null], [null], [null]],
             imageIndices: [0, 0, 0, 0, 0],
@@ -683,24 +639,6 @@ const StoryboardViewer = ({
     });
   };
 
-  // ページ内の配列長を5に揃える
-  const normalizePageArrays = (page) => {
-    const fill = (arr, val) => {
-      while (arr.length < 5) arr.push(val);
-      if (arr.length > 5) arr.length = 5;
-      return arr;
-    };
-    return {
-      ...page,
-      images: fill(page.images, [null]),
-      imageIndices: fill(page.imageIndices || [], 0),
-      faceTexts: fill(page.faceTexts, ''),
-      dialogueTexts: fill(page.dialogueTexts, ''),
-      timeValues: fill(page.timeValues, ''),
-      blendFiles: fill(page.blendFiles, ''),
-    };
-  };
-
   // AI補助ボタンのハンドラ
   const handleAIAssist = (pageIdx, cutIdx) => {
     setSelectedAIFrame({ pageIdx, cutIdx });
@@ -714,10 +652,7 @@ const StoryboardViewer = ({
       const page = newPages[pageIdx];
       const cutImages = [...page.images[cutIdx]];
       const currentIdx = page.imageIndices[cutIdx];
-      
-      // 現在のインデックスに画像を設定
       cutImages[currentIdx] = imageData;
-      
       newPages[pageIdx] = {
         ...page,
         images: page.images.map((imgs, idx) => idx === cutIdx ? cutImages : imgs)
@@ -729,7 +664,6 @@ const StoryboardViewer = ({
   // カット削除
   const handleDeleteCut = (pageIdx, cutIdx) => {
     setPages(prev => {
-      // 全カットをフラット化
       const flatCuts = prev.flatMap((page) =>
         page.images.map((imgs, cIdx) => ({
           images: imgs,
@@ -740,211 +674,706 @@ const StoryboardViewer = ({
           blendFile: page.blendFiles[cIdx]
         }))
       );
-      // グローバルインデックス
       const delIdx = pageIdx * 5 + cutIdx;
       flatCuts.splice(delIdx, 1);
-      // ページに再分割
       return regroupPagesFromFlatCuts(flatCuts);
     });
   };
 
-  // スタイル定義
-  const styles = {
-    container: {
-      padding: '32px',
-      backgroundColor: '#f3f4f6',
-      minHeight: '100vh'
-    },
-    wrapper: {
-      maxWidth: '1152px',
-      margin: '0 auto',
-      backgroundColor: 'white',
-      boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)'
-    },
-    headerSection: {
-      borderBottom: '2px solid black',
-      padding: '16px'
-    },
-    headerContent: {
-      display: 'flex'
-    },
-    headerLeft: {
-      flex: 0.2
-    },
-    headerText: {
-      fontSize: '14px'
-    },
-    headerUnderline: {
-      borderBottom: '1px solid #d1d5db',
-      marginTop: '4px'
-    },
-    headerRight: {
-      flex: 1,
-      marginLeft: '16px'
-    },
-    headerUnderlineRight: {
-      borderBottom: '1px solid #d1d5db',
-      marginTop: '24px'
-    },
-    mainContent: {
-      display: 'flex',
-      position: 'relative'
-    },
-    leftSection: {
-      display: 'flex'
-    },
-    rightSection: {
-      display: 'flex',
-      flex: 1
-    },
-    columnHeader: {
-      borderBottom: '1px solid #d1d5db',
-      padding: '8px',
-      textAlign: 'center',
-      fontSize: '14px'
-    },
-    cutColumn: {
-      borderRight: '2px solid black'
-    },
-    cutContent: {
-      padding: '8px'
-    },
-    mvLabel: {
-      width: '40px',
-      color: '#9ca3af',
-      fontSize: '9px'
-    },
-    screenColumn: {
-      borderRight: '2px solid black'
-    },
-    framesContainer: {
-      padding: '16px'
-    },
-    frameRow: {
-      position: 'relative',
-      marginBottom: '16px'
-    },
-    frame: {
-      border: '4px solid black',
-      width: '256px',
-      height: '144px',
-      cursor: 'pointer',
-      overflow: 'hidden',
-      backgroundColor: 'white',
-      transition: 'background-color 0.15s'
-    },
-    frameHover: {
-      backgroundColor: '#f9fafb'
-    },
-    frameImage: {
-      width: '100%',
-      height: '100%',
-      objectFit: 'cover'
-    },
-    framePlaceholder: {
-      width: '100%',
-      height: '100%',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      color: '#9ca3af'
-    },
-    placeholderContent: {
-      textAlign: 'center'
-    },
-    plusIcon: {
-      width: '32px',
-      height: '32px',
-      margin: '0 auto 8px'
-    },
-    placeholderText: {
-      fontSize: '12px'
-    },
-    horizontalLine: {
-      position: 'absolute',
-      top: '160px', // フレームの高さ(144px) + ボーダー(8px) + 少し余白（少し上に調整）
-      left: '-75px', // カット列の左端から開始
-      right: '-233px', // 分・秒列の右端まで延長
-      height: '1px',
-      backgroundColor: '#d1d5db',
-      zIndex: 10
-    },
-    frameNumber: {
-      position: 'absolute',
-      top: '120px', // 横線のちょっと上
-      left: '-60px', // カット列内の位置
-      fontSize: '20px',
-      color: '#374151',
-      fontWeight: '500'
-    },
-    faceColumn: {
-      borderRight: '1px solid #d1d5db',
-      width: '120px', // 幅を固定
-      minWidth: '120px',
-      maxWidth: '120px'
-    },
-    faceHeader: {
-      width: '120px'
-    },
-    faceContent: {
-      padding: '9px 12px'
-    },
-    faceInputRow: {
-      marginBottom: '2px',
-      height: '165px', // ペアごとに十分な高さ
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      background: 'transparent'
-    },
-    faceInput: {
-      width: '100%',
-      height: '40px', // 高さを40pxに
-      border: '1px solid #d1d5db',
-      borderRadius: '4px',
-      padding: '4px 8px',
-      fontSize: '12px',
-      resize: 'none',
-      outline: 'none',
-      fontFamily: 'inherit',
-      marginBottom: '6px' // 下に少し余白
-    },
-    contentColumn: {
-      flex: 1,
-      borderRight: '1px solid #d1d5db'
-    },
-    timeColumn: {
-      width: '60px'
-    },
-    timeContent: {
-      padding: '16px 4px'
-    },
-    timeInputRow: {
-      marginBottom: '16px',
-      height: '144px', // フレームと同じ高さ
-      display: 'flex',
-      alignItems: 'center'
-    },
-    timeInput: {
-      width: '100%',
-      height: '40px',
-      border: '1px solid #d1d5db',
-      borderRadius: '4px',
-      padding: '8px 4px',
-      fontSize: '12px',
-      textAlign: 'center',
-      outline: 'none',
-      fontFamily: 'inherit'
-    },
-    footerNumber: {
-      textAlign: 'right',
-      padding: '8px',
-      fontSize: '14px',
-      color: '#6b7280'
+  // ---- スマホ専用: 長押しハンドラ ----
+  const handleCutTouchStart = (pageIdx, cutIdx) => {
+    longPressTimer.current = setTimeout(() => {
+      setLongPressTarget({ pageIdx, cutIdx });
+    }, 600);
+  };
+
+  const handleCutTouchEnd = () => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
     }
   };
 
+  // カット移動（上/下）
+  const handleMoveCut = (fromPageIdx, fromCutIdx, direction) => {
+    setPages(prev => {
+      const flat = prev.flatMap((page) =>
+        page.images.map((imgs, cIdx) => ({
+          images: imgs,
+          imageIndex: page.imageIndices[cIdx],
+          faceText: page.faceTexts[cIdx],
+          dialogueText: page.dialogueTexts[cIdx],
+          timeValue: page.timeValues[cIdx],
+          blendFile: page.blendFiles[cIdx]
+        }))
+      );
+      const fromIdx = fromPageIdx * 5 + fromCutIdx;
+      const toIdx = fromIdx + direction;
+      if (toIdx < 0 || toIdx >= flat.length) return prev;
+      const [moved] = flat.splice(fromIdx, 1);
+      flat.splice(toIdx, 0, moved);
+      return regroupPagesFromFlatCuts(flat);
+    });
+    setLongPressTarget(null);
+  };
+
+  // ---- デスクトップ用スタイル定義 ----
+  const styles = {
+    container: { padding: '32px', backgroundColor: '#f3f4f6', minHeight: '100vh' },
+    wrapper: { maxWidth: '1152px', margin: '0 auto', backgroundColor: 'white', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)' },
+    headerSection: { borderBottom: '2px solid black', padding: '16px' },
+    headerContent: { display: 'flex' },
+    headerLeft: { flex: 0.2 },
+    headerText: { fontSize: '14px' },
+    headerUnderline: { borderBottom: '1px solid #d1d5db', marginTop: '4px' },
+    headerRight: { flex: 1, marginLeft: '16px' },
+    headerUnderlineRight: { borderBottom: '1px solid #d1d5db', marginTop: '24px' },
+    mainContent: { display: 'flex', position: 'relative' },
+    leftSection: { display: 'flex' },
+    rightSection: { display: 'flex', flex: 1 },
+    columnHeader: { borderBottom: '1px solid #d1d5db', padding: '8px', textAlign: 'center', fontSize: '14px' },
+    cutColumn: { borderRight: '2px solid black' },
+    cutContent: { padding: '8px' },
+    mvLabel: { width: '40px', color: '#9ca3af', fontSize: '9px' },
+    screenColumn: { borderRight: '2px solid black' },
+    framesContainer: { padding: '16px' },
+    frameRow: { position: 'relative', marginBottom: '16px' },
+    frame: { border: '4px solid black', width: '256px', height: '144px', cursor: 'pointer', overflow: 'hidden', backgroundColor: 'white', transition: 'background-color 0.15s' },
+    frameHover: { backgroundColor: '#f9fafb' },
+    frameImage: { width: '100%', height: '100%', objectFit: 'cover' },
+    framePlaceholder: { width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9ca3af' },
+    placeholderContent: { textAlign: 'center' },
+    plusIcon: { width: '32px', height: '32px', margin: '0 auto 8px' },
+    placeholderText: { fontSize: '12px' },
+    horizontalLine: { position: 'absolute', top: '160px', left: '-75px', right: '-233px', height: '1px', backgroundColor: '#d1d5db', zIndex: 10 },
+    frameNumber: { position: 'absolute', top: '120px', left: '-60px', fontSize: '20px', color: '#374151', fontWeight: '500' },
+    faceColumn: { borderRight: '1px solid #d1d5db', width: '120px', minWidth: '120px', maxWidth: '120px' },
+    faceHeader: { width: '120px' },
+    faceContent: { padding: '9px 12px' },
+    faceInputRow: { marginBottom: '2px', height: '165px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'transparent' },
+    faceInput: { width: '100%', height: '40px', border: '1px solid #d1d5db', borderRadius: '4px', padding: '4px 8px', fontSize: '12px', resize: 'none', outline: 'none', fontFamily: 'inherit', marginBottom: '6px' },
+    contentColumn: { flex: 1, borderRight: '1px solid #d1d5db' },
+    timeColumn: { width: '60px' },
+    timeContent: { padding: '16px 4px' },
+    timeInputRow: { marginBottom: '16px', height: '144px', display: 'flex', alignItems: 'center' },
+    timeInput: { width: '100%', height: '40px', border: '1px solid #d1d5db', borderRadius: '4px', padding: '8px 4px', fontSize: '12px', textAlign: 'center', outline: 'none', fontFamily: 'inherit' },
+    footerNumber: { textAlign: 'right', padding: '8px', fontSize: '14px', color: '#6b7280' }
+  };
+
+  // =========================================================
+  // モバイルレイアウト
+  // =========================================================
+  if (isMobile) {
+    const globalCuts = pages.flatMap((page, pageIdx) =>
+      page.images.map((_, cutIdx) => ({ page, pageIdx, cutIdx, globalIdx: pageIdx * 5 + cutIdx }))
+    );
+
+    return (
+      <div style={{ minHeight: '100vh', backgroundColor: '#f1f5f9', fontFamily: 'inherit' }}>
+
+        {/* ---- モバイル全画面再生オーバーレイ ---- */}
+        {isPlaying && flatCuts[currentFrame] && (
+          <div style={{
+            position: 'fixed',
+            zIndex: 9999,
+            background: '#000',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            ...(isPortrait ? {
+              width: '100vh',
+              height: '100vw',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%) rotate(90deg)',
+            } : {
+              top: 0, left: 0, right: 0, bottom: 0,
+              width: '100vw',
+              height: '100vh',
+            })
+          }}>
+            {/* 画像エリア */}
+            <div style={{ flex: 1, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+              {flatCuts[currentFrame].image ? (
+                <img
+                  src={flatCuts[currentFrame].image}
+                  alt={`Frame ${currentFrame + 1}`}
+                  style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                />
+              ) : (
+                <div style={{ width: '80%', aspectRatio: '16/9', background: '#111', borderRadius: '8px' }} />
+              )}
+            </div>
+
+            {/* 情報エリア */}
+            <div style={{ width: '100%', background: 'rgba(0,0,0,0.7)', padding: '8px 16px', textAlign: 'center' }}>
+              {flatCuts[currentFrame].dialogueText && (
+                <div style={{ color: 'white', fontSize: '16px', marginBottom: '4px', lineHeight: 1.4 }}>
+                  {flatCuts[currentFrame].dialogueText}
+                </div>
+              )}
+              <div style={{ color: '#94a3b8', fontSize: '13px' }}>
+                {currentFrame + 1} / {totalCuts}
+                {playbackMode === 'auto' && ` · ${parseFloat(flatCuts[currentFrame].timeValue) || 1}秒`}
+              </div>
+            </div>
+
+            {/* コントロールエリア */}
+            <div style={{ width: '100%', padding: '12px 16px', background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
+              {playbackMode === 'manual' ? (
+                <>
+                  <button
+                    onClick={() => setCurrentFrame(f => Math.max(0, f - 1))}
+                    disabled={currentFrame === 0}
+                    style={{
+                      padding: '12px 28px',
+                      background: currentFrame === 0 ? '#374151' : '#3b82f6',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '8px',
+                      fontSize: '20px',
+                      cursor: currentFrame === 0 ? 'not-allowed' : 'pointer',
+                      fontFamily: 'inherit',
+                      transition: 'background 0.2s'
+                    }}
+                  >
+                    ◀
+                  </button>
+                  <button
+                    onClick={handleStop}
+                    style={{
+                      padding: '12px 20px',
+                      background: '#ef4444',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '8px',
+                      fontSize: '15px',
+                      cursor: 'pointer',
+                      fontFamily: 'inherit'
+                    }}
+                  >
+                    ■ 停止
+                  </button>
+                  <button
+                    onClick={() => setCurrentFrame(f => Math.min(f + 1, totalCuts - 1))}
+                    disabled={currentFrame >= totalCuts - 1}
+                    style={{
+                      padding: '12px 28px',
+                      background: currentFrame >= totalCuts - 1 ? '#374151' : '#3b82f6',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '8px',
+                      fontSize: '20px',
+                      cursor: currentFrame >= totalCuts - 1 ? 'not-allowed' : 'pointer',
+                      fontFamily: 'inherit',
+                      transition: 'background 0.2s'
+                    }}
+                  >
+                    ▶
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={handleStop}
+                  style={{
+                    padding: '12px 32px',
+                    background: '#ef4444',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '8px',
+                    fontSize: '16px',
+                    cursor: 'pointer',
+                    fontFamily: 'inherit'
+                  }}
+                >
+                  ■ 停止
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ---- 長押しメニュー ---- */}
+        {longPressTarget && (
+          <div
+            style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 9998, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            onClick={() => setLongPressTarget(null)}
+          >
+            <div
+              style={{ background: 'white', borderRadius: '16px', padding: '24px 32px', minWidth: '240px', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}
+              onClick={e => e.stopPropagation()}
+            >
+              <div style={{ textAlign: 'center', marginBottom: '20px', fontWeight: 700, fontSize: '16px', color: '#1e293b' }}>
+                カット {longPressTarget.pageIdx * 5 + longPressTarget.cutIdx + 1} を移動
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <button
+                  onClick={() => handleMoveCut(longPressTarget.pageIdx, longPressTarget.cutIdx, -1)}
+                  disabled={longPressTarget.pageIdx * 5 + longPressTarget.cutIdx === 0}
+                  style={{
+                    padding: '14px',
+                    background: longPressTarget.pageIdx * 5 + longPressTarget.cutIdx === 0 ? '#e2e8f0' : '#3b82f6',
+                    color: longPressTarget.pageIdx * 5 + longPressTarget.cutIdx === 0 ? '#94a3b8' : 'white',
+                    border: 'none', borderRadius: '10px', fontSize: '16px', fontWeight: 600,
+                    cursor: longPressTarget.pageIdx * 5 + longPressTarget.cutIdx === 0 ? 'not-allowed' : 'pointer',
+                    fontFamily: 'inherit'
+                  }}
+                >
+                  ↑ 前に移動
+                </button>
+                <button
+                  onClick={() => handleMoveCut(longPressTarget.pageIdx, longPressTarget.cutIdx, 1)}
+                  disabled={longPressTarget.pageIdx * 5 + longPressTarget.cutIdx >= totalCuts - 1}
+                  style={{
+                    padding: '14px',
+                    background: longPressTarget.pageIdx * 5 + longPressTarget.cutIdx >= totalCuts - 1 ? '#e2e8f0' : '#3b82f6',
+                    color: longPressTarget.pageIdx * 5 + longPressTarget.cutIdx >= totalCuts - 1 ? '#94a3b8' : 'white',
+                    border: 'none', borderRadius: '10px', fontSize: '16px', fontWeight: 600,
+                    cursor: longPressTarget.pageIdx * 5 + longPressTarget.cutIdx >= totalCuts - 1 ? 'not-allowed' : 'pointer',
+                    fontFamily: 'inherit'
+                  }}
+                >
+                  ↓ 後に移動
+                </button>
+                <button
+                  onClick={() => setLongPressTarget(null)}
+                  style={{
+                    padding: '12px',
+                    background: '#f1f5f9',
+                    color: '#64748b',
+                    border: 'none', borderRadius: '10px', fontSize: '15px',
+                    cursor: 'pointer', fontFamily: 'inherit'
+                  }}
+                >
+                  キャンセル
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ---- トップバー ---- */}
+        <div style={{
+          position: 'sticky', top: 0, zIndex: 100,
+          background: '#1e293b',
+          padding: '10px 12px',
+          display: 'flex', alignItems: 'center', gap: '8px',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
+        }}>
+          <input
+            type="text"
+            value={storyboardName}
+            onChange={e => setStoryboardName(e.target.value)}
+            placeholder="絵コンテ名"
+            style={{
+              flex: 1,
+              fontSize: '14px',
+              padding: '6px 10px',
+              border: '1px solid #475569',
+              borderRadius: '6px',
+              outline: 'none',
+              fontFamily: 'inherit',
+              background: '#334155',
+              color: 'white',
+              minWidth: 0
+            }}
+          />
+          {storyboardId && user && (
+            <button
+              onClick={handleManualSave}
+              disabled={saving || !hasUnsavedChanges}
+              style={{
+                padding: '6px 12px',
+                fontSize: '13px',
+                background: hasUnsavedChanges ? '#16a34a' : '#475569',
+                color: 'white',
+                border: 'none', borderRadius: '6px',
+                cursor: hasUnsavedChanges ? 'pointer' : 'default',
+                fontFamily: 'inherit',
+                whiteSpace: 'nowrap',
+                fontWeight: hasUnsavedChanges ? 600 : 400
+              }}
+            >
+              {saving ? '⏳' : '💾'} 保存
+            </button>
+          )}
+          {hasUnsavedChanges && (
+            <span style={{ fontSize: '10px', color: '#fbbf24', whiteSpace: 'nowrap' }}>未保存</span>
+          )}
+        </div>
+
+        {/* ---- 再生コントロールバー ---- */}
+        <div style={{
+          background: 'white',
+          borderBottom: '1px solid #e2e8f0',
+          padding: '10px 12px',
+          display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap'
+        }}>
+          {/* 再生モード */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '3px', fontSize: '12px', color: '#374151', userSelect: 'none' }}>
+              <input type="radio" name="mob-playbackMode" value="auto"
+                checked={playbackMode === 'auto'} onChange={() => setPlaybackMode('auto')} disabled={isPlaying}
+                style={{ margin: 0 }} />
+              自動
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '3px', fontSize: '12px', color: '#374151', userSelect: 'none' }}>
+              <input type="radio" name="mob-playbackMode" value="manual"
+                checked={playbackMode === 'manual'} onChange={() => setPlaybackMode('manual')} disabled={isPlaying}
+                style={{ margin: 0 }} />
+              手動
+            </label>
+          </div>
+
+          <button
+            onClick={handlePlay}
+            disabled={isPlaying}
+            style={{
+              padding: '8px 18px', fontSize: '14px',
+              background: isPlaying ? '#9ca3af' : '#10b981',
+              color: 'white', border: 'none', borderRadius: '6px',
+              cursor: isPlaying ? 'not-allowed' : 'pointer',
+              fontFamily: 'inherit', fontWeight: 600
+            }}
+          >
+            ▶ 再生
+          </button>
+
+          <button
+            onClick={handleStop}
+            disabled={!isPlaying}
+            style={{
+              padding: '8px 14px', fontSize: '14px',
+              background: !isPlaying ? '#e2e8f0' : '#ef4444',
+              color: !isPlaying ? '#94a3b8' : 'white',
+              border: 'none', borderRadius: '6px',
+              cursor: !isPlaying ? 'not-allowed' : 'pointer',
+              fontFamily: 'inherit'
+            }}
+          >
+            ■ 停止
+          </button>
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: '#374151', userSelect: 'none' }}>
+            <input type="checkbox" checked={isAutoSpeak} onChange={e => setIsAutoSpeak(e.target.checked)}
+              disabled={isPlaying} style={{ margin: 0 }} />
+            セリフ読み上げ
+          </label>
+
+          {/* ストップウォッチ（コンパクト） */}
+          <button
+            onClick={handleStopwatchClick}
+            style={{
+              marginLeft: 'auto',
+              padding: '6px 10px',
+              background: isStopwatchRunning ? '#dc2626' : '#2563eb',
+              color: 'white', border: 'none', borderRadius: '6px',
+              fontSize: '12px', cursor: 'pointer', fontFamily: 'inherit',
+              display: 'flex', alignItems: 'center', gap: '4px'
+            }}
+            title="タイム計測"
+          >
+            ⏱ {isStopwatchRunning ? '...' : (stopwatchTime ? `${stopwatchTime}s` : '0.00')}
+          </button>
+        </div>
+
+        {/* ---- カットリスト ---- */}
+        <div style={{ padding: '12px 10px 80px' }}>
+          {globalCuts.map(({ page, pageIdx, cutIdx, globalIdx }) => {
+            const cutImages = page.images[cutIdx];
+            const currentImgIdx = page.imageIndices[cutIdx];
+            const currentImage = cutImages[currentImgIdx];
+            const uploadKey = `${pageIdx}-${cutIdx}`;
+            const isUploading = uploadingImages.has(uploadKey);
+
+            return (
+              <div key={`${pageIdx}-${cutIdx}`} style={{
+                background: 'white',
+                borderRadius: '12px',
+                marginBottom: '12px',
+                overflow: 'hidden',
+                boxShadow: '0 1px 6px rgba(0,0,0,0.08)',
+                border: '1px solid #e2e8f0'
+              }}>
+                {/* カードヘッダー */}
+                <div
+                  style={{
+                    display: 'flex', alignItems: 'center',
+                    padding: '8px 12px',
+                    background: '#f8fafc',
+                    borderBottom: '1px solid #e2e8f0',
+                    userSelect: 'none'
+                  }}
+                  onTouchStart={() => handleCutTouchStart(pageIdx, cutIdx)}
+                  onTouchEnd={handleCutTouchEnd}
+                  onTouchMove={handleCutTouchEnd}
+                >
+                  <span style={{ fontWeight: 700, fontSize: '13px', color: '#1e293b' }}>
+                    カット {globalIdx + 1}
+                  </span>
+                  <span style={{ marginLeft: '6px', fontSize: '10px', color: '#94a3b8' }}>長押しで並び替え</span>
+                  <div style={{ marginLeft: 'auto', display: 'flex', gap: '6px' }}>
+                    <button
+                      onClick={() => handleAIAssist(pageIdx, cutIdx)}
+                      style={{
+                        padding: '4px 8px', fontSize: '11px',
+                        background: '#6366f1', color: 'white',
+                        border: 'none', borderRadius: '5px',
+                        cursor: 'pointer', fontFamily: 'inherit'
+                      }}
+                    >
+                      AI
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (window.confirm(`カット ${globalIdx + 1} を削除しますか？`)) {
+                          handleDeleteCut(pageIdx, cutIdx);
+                        }
+                      }}
+                      style={{
+                        padding: '4px 8px', fontSize: '11px',
+                        background: '#fee2e2', color: '#dc2626',
+                        border: '1px solid #fca5a5', borderRadius: '5px',
+                        cursor: 'pointer', fontFamily: 'inherit'
+                      }}
+                    >
+                      削除
+                    </button>
+                  </div>
+                </div>
+
+                {/* 画像エリア (16:9) */}
+                <div
+                  style={{
+                    position: 'relative',
+                    paddingTop: '56.25%', // 16:9
+                    background: '#e2e8f0',
+                    cursor: 'pointer',
+                    overflow: 'hidden'
+                  }}
+                  onClick={(e) => handleFrameClick(pageIdx, cutIdx, e)}
+                >
+                  <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
+                    {isUploading ? (
+                      <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '8px', color: '#3b82f6' }}>
+                        <div style={{ fontSize: '24px' }}>⏳</div>
+                        <div style={{ fontSize: '13px', fontWeight: 600 }}>アップロード中...</div>
+                      </div>
+                    ) : currentImage ? (
+                      <img
+                        src={currentImage}
+                        alt={`Cut ${globalIdx + 1}`}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      />
+                    ) : (
+                      <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '6px', color: '#94a3b8' }}>
+                        <svg width="36" height="36" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
+                        </svg>
+                        <span style={{ fontSize: '12px' }}>タップして画像追加</span>
+                      </div>
+                    )}
+
+                    {/* 複数画像ナビゲーション */}
+                    {cutImages.filter(Boolean).length > 1 && (
+                      <>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleChangeImageIndex(pageIdx, cutIdx, -1); }}
+                          style={{
+                            position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)',
+                            width: '36px', height: '36px',
+                            background: 'rgba(0,0,0,0.55)', color: 'white',
+                            border: 'none', borderRadius: '50%', fontSize: '16px',
+                            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0
+                          }}
+                        >◀</button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleChangeImageIndex(pageIdx, cutIdx, 1); }}
+                          style={{
+                            position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)',
+                            width: '36px', height: '36px',
+                            background: 'rgba(0,0,0,0.55)', color: 'white',
+                            border: 'none', borderRadius: '50%', fontSize: '16px',
+                            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0
+                          }}
+                        >▶</button>
+                        <div style={{
+                          position: 'absolute', bottom: '8px', left: '50%', transform: 'translateX(-50%)',
+                          background: 'rgba(0,0,0,0.6)', color: 'white',
+                          padding: '2px 8px', borderRadius: '10px', fontSize: '11px'
+                        }}>
+                          {currentImgIdx + 1} / {cutImages.filter(Boolean).length}
+                        </div>
+                      </>
+                    )}
+
+                    {/* 画像追加ボタン */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const input = document.createElement('input');
+                        input.type = 'file';
+                        input.accept = 'image/jpeg, image/png';
+                        input.onchange = (ev) => handleImageUpload(pageIdx, cutIdx, ev, true);
+                        input.click();
+                      }}
+                      style={{
+                        position: 'absolute', top: '8px', right: '8px',
+                        width: '30px', height: '30px',
+                        background: '#10b981', color: 'white',
+                        border: 'none', borderRadius: '50%', fontSize: '18px',
+                        cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+                        zIndex: 2
+                      }}
+                      title="画像を追加"
+                    >+</button>
+
+                    {/* 画像削除ボタン */}
+                    {currentImage && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (window.confirm('この画像を削除しますか？')) {
+                            handleDeleteCurrentImage(pageIdx, cutIdx);
+                          }
+                        }}
+                        style={{
+                          position: 'absolute', top: '8px', left: '8px',
+                          width: '30px', height: '30px',
+                          background: '#ef4444', color: 'white',
+                          border: 'none', borderRadius: '50%', fontSize: '16px',
+                          cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+                          zIndex: 2
+                        }}
+                        title="この画像を削除"
+                      >×</button>
+                    )}
+                  </div>
+                </div>
+
+                {/* テキストエリア */}
+                <div style={{ padding: '10px 12px' }}>
+                  <textarea
+                    value={page.faceTexts[cutIdx]}
+                    onChange={(e) => handleTextChange(pageIdx, cutIdx, e.target.value)}
+                    placeholder="内容..."
+                    rows={2}
+                    style={{
+                      width: '100%', boxSizing: 'border-box',
+                      border: '1px solid #e2e8f0', borderRadius: '6px',
+                      padding: '6px 10px', fontSize: '13px',
+                      resize: 'vertical', outline: 'none',
+                      fontFamily: 'inherit', lineHeight: 1.5,
+                      background: '#f8fafc'
+                    }}
+                  />
+
+                  <div style={{ display: 'flex', gap: '6px', marginTop: '6px', alignItems: 'flex-start' }}>
+                    <textarea
+                      value={page.dialogueTexts[cutIdx]}
+                      onChange={(e) => handleDialogueChange(pageIdx, cutIdx, e.target.value)}
+                      placeholder="セリフ..."
+                      rows={2}
+                      style={{
+                        flex: 1,
+                        border: '1px solid #e2e8f0', borderRadius: '6px',
+                        padding: '6px 10px', fontSize: '13px',
+                        resize: 'vertical', outline: 'none',
+                        fontFamily: 'inherit', lineHeight: 1.5,
+                        background: '#f8fafc'
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (window.speechSynthesis) {
+                          const utter = new window.SpeechSynthesisUtterance(page.dialogueTexts[cutIdx]);
+                          utter.lang = 'ja-JP';
+                          window.speechSynthesis.speak(utter);
+                        }
+                      }}
+                      style={{
+                        padding: '6px 8px',
+                        background: '#f1f5f9', border: '1px solid #e2e8f0',
+                        borderRadius: '6px', cursor: 'pointer',
+                        fontSize: '16px', lineHeight: 1,
+                        flexShrink: 0, marginTop: '1px'
+                      }}
+                      title="セリフを読み上げる"
+                    >
+                      🔊
+                    </button>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
+                    <span style={{ fontSize: '12px', color: '#64748b' }}>秒数:</span>
+                    <input
+                      type="text"
+                      value={page.timeValues[cutIdx]}
+                      onChange={(e) => handleTimeChange(pageIdx, cutIdx, e.target.value)}
+                      placeholder="1.0"
+                      inputMode="decimal"
+                      style={{
+                        width: '64px',
+                        border: '1px solid #e2e8f0', borderRadius: '6px',
+                        padding: '5px 8px', fontSize: '13px',
+                        textAlign: 'center', outline: 'none',
+                        fontFamily: 'inherit', background: '#f8fafc'
+                      }}
+                    />
+                    <button
+                      onClick={() => handleAddCutAt(pageIdx, cutIdx)}
+                      style={{
+                        marginLeft: 'auto',
+                        padding: '5px 10px', fontSize: '12px',
+                        background: '#ede9fe', color: '#6d28d9',
+                        border: '1px solid #c4b5fd', borderRadius: '6px',
+                        cursor: 'pointer', fontFamily: 'inherit'
+                      }}
+                    >
+                      + 前に挿入
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+
+          {/* ページ追加ボタン */}
+          <div style={{ textAlign: 'center', padding: '16px 0' }}>
+            <button
+              onClick={handleAddPage}
+              style={{
+                padding: '14px 32px', fontSize: '15px',
+                background: '#2563eb', color: 'white',
+                border: 'none', borderRadius: '10px',
+                cursor: 'pointer', fontFamily: 'inherit',
+                fontWeight: 600,
+                boxShadow: '0 4px 12px rgba(37,99,235,0.3)'
+              }}
+            >
+              + ページ追加（カット5枚）
+            </button>
+          </div>
+        </div>
+
+        {/* AI補助パネル */}
+        <StoryboardAIPanel
+          isVisible={aiPanelVisible}
+          selectedFrame={selectedAIFrame}
+          pages={pages}
+          onClose={() => setAiPanelVisible(false)}
+          onFrameGenerated={handleAIFrameGenerated}
+          onFrameUpdated={() => {}}
+        />
+      </div>
+    );
+  }
+
+  // =========================================================
+  // デスクトップレイアウト（既存）
+  // =========================================================
   return (
     <div style={styles.container}>
       {/* PDF保存ボタンとストップウォッチを横並びに */}
@@ -955,250 +1384,167 @@ const StoryboardViewer = ({
         <button
           onClick={() => setAreButtonsHidden(!areButtonsHidden)}
           style={{
-            padding: '6px 12px',
-            fontSize: '13px',
+            padding: '6px 12px', fontSize: '13px',
             background: areButtonsHidden ? '#ef4444' : '#6b7280',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            fontFamily: 'inherit',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
+            color: 'white', border: 'none', borderRadius: '4px',
+            cursor: 'pointer', fontFamily: 'inherit',
+            display: 'flex', alignItems: 'center', gap: '6px',
             transition: 'background 0.2s'
           }}
           title={areButtonsHidden ? 'ボタンを表示 (Fキー)' : 'ボタンを非表示 (Fキー)'}
         >
           <span style={{ fontSize: '16px' }}>{areButtonsHidden ? '👁️' : '🙈'}</span>
           <span>{areButtonsHidden ? 'ボタン表示' : 'ボタン非表示'}</span>
-          <span style={{ 
-            fontSize: '11px', 
-            opacity: 0.8, 
-            marginLeft: '2px',
-            background: 'rgba(0,0,0,0.2)',
-            padding: '1px 4px',
-            borderRadius: '3px'
-          }}>F</span>
+          <span style={{ fontSize: '11px', opacity: 0.8, marginLeft: '2px', background: 'rgba(0,0,0,0.2)', padding: '1px 4px', borderRadius: '3px' }}>F</span>
         </button>
+
+        {/* 手動保存ボタン */}
+        {storyboardId && user && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button
+              onClick={handleManualSave}
+              disabled={saving || !hasUnsavedChanges}
+              style={{
+                padding: '6px 16px', fontSize: '13px',
+                background: hasUnsavedChanges ? '#16a34a' : '#d1d5db',
+                color: hasUnsavedChanges ? 'white' : '#6b7280',
+                border: 'none', borderRadius: '4px',
+                cursor: hasUnsavedChanges ? 'pointer' : 'default',
+                fontFamily: 'inherit',
+                display: 'flex', alignItems: 'center', gap: '6px',
+                transition: 'background 0.2s',
+                fontWeight: hasUnsavedChanges ? 600 : 400
+              }}
+              title={hasUnsavedChanges ? 'クラウドに保存する' : '変更なし'}
+            >
+              <span style={{ fontSize: '15px' }}>{saving ? '⏳' : '💾'}</span>
+              <span>{saving ? '保存中...' : '保存'}</span>
+            </button>
+            {lastSaved && !hasUnsavedChanges && (
+              <span style={{ fontSize: '12px', color: '#6b7280' }}>
+                {lastSaved.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })} 保存済み
+              </span>
+            )}
+            {hasUnsavedChanges && (
+              <span style={{ fontSize: '12px', color: '#b45309' }}>未保存の変更あり</span>
+            )}
+          </div>
+        )}
       </div>
-      {/* ストップウォッチ丸ボタンを画面中央右に固定配置 */}
+
+      {/* ストップウォッチ丸ボタン（固定） */}
       <button
         onClick={handleStopwatchClick}
         style={{
-          width: '56px',
-          height: '56px',
-          borderRadius: '50%',
-          background: '#2563eb',
-          color: 'white',
-          border: 'none',
-          fontSize: '14px',
-          fontWeight: 600,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
-          cursor: 'pointer',
-          fontFamily: 'inherit',
-          position: 'fixed',
-          top: '50%',
-          right: '32px',
-          transform: 'translateY(-50%)',
-          outline: 'none',
-          userSelect: 'none',
-          transition: 'background 0.2s',
-          zIndex: 2000,
+          width: '56px', height: '56px', borderRadius: '50%',
+          background: '#2563eb', color: 'white', border: 'none',
+          fontSize: '14px', fontWeight: 600,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.06)', cursor: 'pointer', fontFamily: 'inherit',
+          position: 'fixed', top: '50%', right: '32px', transform: 'translateY(-50%)',
+          outline: 'none', userSelect: 'none', transition: 'background 0.2s', zIndex: 2000,
         }}
         title="クリックで計測開始/停止"
       >
         <span style={{ fontSize: '12px', marginBottom: '2px' }}>タイム</span>
         <span style={{ fontSize: '15px', fontWeight: 700 }}>
-          {isStopwatchRunning
-            ? '...'
-            : stopwatchTime
-              ? stopwatchTime
-              : '0.00'}
+          {isStopwatchRunning ? '...' : stopwatchTime ? stopwatchTime : '0.00'}
         </span>
       </button>
-      {/* 再生ボタンとセリフ自動再生チェックボックス */}
+
+      {/* 再生コントロール */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '16px', margin: '16px 0' }}>
-        {/* 再生モード切り替え */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span style={{ fontSize: '12px', color: '#6b7280' }}>再生</span>
           <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: '#374151', userSelect: 'none', lineHeight: 1 }}>
-            <input
-              type="radio"
-              name="playbackMode"
-              value="auto"
-              checked={playbackMode === 'auto'}
-              onChange={() => setPlaybackMode('auto')}
-              disabled={isPlaying}
-              style={{ transform: 'scale(0.9)', margin: 0 }}
-            />
+            <input type="radio" name="playbackMode" value="auto"
+              checked={playbackMode === 'auto'} onChange={() => setPlaybackMode('auto')} disabled={isPlaying}
+              style={{ transform: 'scale(0.9)', margin: 0 }} />
             自動
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: '#374151', userSelect: 'none', lineHeight: 1 }}>
-            <input
-              type="radio"
-              name="playbackMode"
-              value="manual"
-              checked={playbackMode === 'manual'}
-              onChange={() => setPlaybackMode('manual')}
-              disabled={isPlaying}
-              style={{ transform: 'scale(0.9)', margin: 0 }}
-            />
+            <input type="radio" name="playbackMode" value="manual"
+              checked={playbackMode === 'manual'} onChange={() => setPlaybackMode('manual')} disabled={isPlaying}
+              style={{ transform: 'scale(0.9)', margin: 0 }} />
             手動（←/→）
           </label>
         </div>
         <button
-          onClick={handlePlay}
-          disabled={isPlaying}
+          onClick={handlePlay} disabled={isPlaying}
           style={{
-            padding: '8px 24px',
-            fontSize: '16px',
+            padding: '8px 24px', fontSize: '16px',
             background: isPlaying ? '#9ca3af' : '#10b981',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: isPlaying ? 'not-allowed' : 'pointer',
-            fontFamily: 'inherit'
+            color: 'white', border: 'none', borderRadius: '4px',
+            cursor: isPlaying ? 'not-allowed' : 'pointer', fontFamily: 'inherit'
           }}
         >
           {isPlaying ? '再生中...' : '再生'}
         </button>
         <button
-          onClick={handleStop}
-          disabled={!isPlaying}
+          onClick={handleStop} disabled={!isPlaying}
           style={{
-            padding: '8px 24px',
-            fontSize: '16px',
+            padding: '8px 24px', fontSize: '16px',
             background: !isPlaying ? '#9ca3af' : '#ef4444',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: !isPlaying ? 'not-allowed' : 'pointer',
-            fontFamily: 'inherit'
+            color: 'white', border: 'none', borderRadius: '4px',
+            cursor: !isPlaying ? 'not-allowed' : 'pointer', fontFamily: 'inherit'
           }}
         >
           停止
         </button>
         <button
           onClick={handleExport}
-          style={{
-            padding: '8px 16px',
-            fontSize: '14px',
-            background: '#10b981',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            fontFamily: 'inherit'
-          }}
+          style={{ padding: '8px 16px', fontSize: '14px', background: '#10b981', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontFamily: 'inherit' }}
         >
           エクスポート
         </button>
         <label style={{
-          padding: 0,
-          margin: 0,
-          display: 'inline-block',
-          cursor: 'pointer',
-          background: '#6366f1',
-          color: 'white',
-          borderRadius: '4px',
-          fontSize: '14px',
-          fontFamily: 'inherit',
-          border: 'none',
-          marginLeft: '4px',
-          paddingLeft: '8px',
-          paddingRight: '8px',
-          paddingTop: '8px',
-          paddingBottom: '8px',
+          padding: '8px', display: 'inline-block', cursor: 'pointer',
+          background: '#6366f1', color: 'white', borderRadius: '4px',
+          fontSize: '14px', fontFamily: 'inherit', border: 'none', marginLeft: '4px',
         }}>
           インポート
-          <input
-            type="file"
-            accept="application/json"
-            style={{ display: 'none' }}
-            onChange={handleImport}
-          />
+          <input type="file" accept="application/json" style={{ display: 'none' }} onChange={handleImport} />
         </label>
         <label style={{ display: 'flex', alignItems: 'center', fontSize: '14px', color: '#374151', userSelect: 'none' }}>
-          <input
-            type="checkbox"
-            checked={isAutoSpeak}
-            onChange={e => setIsAutoSpeak(e.target.checked)}
-            style={{ marginRight: '6px' }}
-            disabled={isPlaying}
-          />
+          <input type="checkbox" checked={isAutoSpeak} onChange={e => setIsAutoSpeak(e.target.checked)}
+            disabled={isPlaying} style={{ marginRight: '6px' }} />
           セリフも自動再生する
         </label>
       </div>
-      {/* 再生中は大きく画像を表示 */}
+
+      {/* デスクトップ: 再生中の大きな表示 */}
       {isPlaying && flatCuts[currentFrame] && (
-        <div style={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          margin: '24px 0',
-        }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', margin: '24px 0' }}>
           {flatCuts[currentFrame].image ? (
             <img
               src={flatCuts[currentFrame].image}
               alt={`Frame ${currentFrame + 1}`}
-              style={{
-                width: '512px',
-                height: '288px',
-                objectFit: 'cover',
-                border: '6px solid #2563eb',
-                borderRadius: '12px',
-                boxShadow: '0 4px 24px rgba(0,0,0,0.15)'
-              }}
+              style={{ width: '512px', height: '288px', objectFit: 'cover', border: '6px solid #2563eb', borderRadius: '12px', boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }}
             />
           ) : (
-            <div
-              style={{
-                width: '512px',
-                height: '288px',
-                background: 'black',
-                border: '6px solid #2563eb',
-                borderRadius: '12px',
-                boxShadow: '0 4px 24px rgba(0,0,0,0.15)'
-              }}
-            />
+            <div style={{ width: '512px', height: '288px', background: 'black', border: '6px solid #2563eb', borderRadius: '12px', boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }} />
           )}
           <div style={{ marginTop: '12px', fontSize: '18px', color: '#374151' }}>
             {currentFrame + 1}枚目 / {playbackMode === 'auto' ? `${parseFloat(flatCuts[currentFrame].timeValue) || 1}秒` : '手動'}
           </div>
           {playbackMode === 'manual' && (
-            <div style={{ marginTop: '6px', fontSize: '13px', color: '#6b7280' }}>
-              ←/→で移動（Escで停止）
-            </div>
+            <div style={{ marginTop: '6px', fontSize: '13px', color: '#6b7280' }}>←/→で移動（Escで停止）</div>
           )}
         </div>
       )}
+
       <div style={styles.wrapper} ref={exportRef}>
         {/* ヘッダー部分 */}
         <div style={styles.headerSection}>
           <div style={styles.headerContent}>
             <div style={styles.headerLeft}>
               <span style={styles.headerText}>No.</span>
-              {/* 絵コンテ名インプット */}
               <input
                 type="text"
                 value={storyboardName}
                 onChange={e => setStoryboardName(e.target.value)}
                 placeholder="絵コンテ名"
-                style={{
-                  marginLeft: '12px',
-                  fontSize: '15px',
-                  padding: '2px 8px',
-                  border: '1px solid #d1d5db',
-                  borderRadius: '4px',
-                  outline: 'none',
-                  fontFamily: 'inherit',
-                  width: '180px',
-                }}
+                style={{ marginLeft: '12px', fontSize: '15px', padding: '2px 8px', border: '1px solid #d1d5db', borderRadius: '4px', outline: 'none', fontFamily: 'inherit', width: '180px' }}
               />
               <div style={styles.headerUnderline}></div>
             </div>
@@ -1211,60 +1557,36 @@ const StoryboardViewer = ({
         {/* ページごとに描画 */}
         {pages.map((page, pageIdx) => (
           <div key={pageIdx}>
-            {/* メインコンテンツ */}
-            <div
-              style={styles.mainContent}
-              ref={el => pageRefs.current[pageIdx] = el}
-            >
-              {/* PDFエクスポート時のみ左上に絵コンテ名-ページ番号を表示 */}
+            <div style={styles.mainContent} ref={el => pageRefs.current[pageIdx] = el}>
               {isExportingPDF && (
                 <div style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: '-80px',
-                  width: '100%',
-                  fontWeight: 'bold',
-                  fontSize: '18px',
-                  color: '#222',
-                  background: 'rgba(255,255,255,0.95)',
-                  padding: '8px 0 8px 12px',
-                  zIndex: 100,
-                  borderBottom: '2px solid #222',
-                  boxShadow: 'none',
-                  borderBottomRightRadius: 0,
-                  borderBottomLeftRadius: 0,
-                  margin: 0
+                  position: 'absolute', top: 0, left: '-80px', width: '100%',
+                  fontWeight: 'bold', fontSize: '18px', color: '#222',
+                  background: 'rgba(255,255,255,0.95)', padding: '8px 0 8px 12px',
+                  zIndex: 100, borderBottom: '2px solid #222',
                 }}>
                   {`${storyboardName || 'Storyboard'}-${pageIdx + 1}`}
                 </div>
               )}
+
               {/* 左側のセクション */}
               <div style={styles.leftSection}>
                 {/* カット列 */}
                 <div style={styles.cutColumn}>
-                  <div style={styles.columnHeader}>
-                    カット
-                  </div>
+                  <div style={styles.columnHeader}>カット</div>
                   <div style={styles.cutContent}>
-                    <div style={styles.mvLabel}>
-                      ＜16:9＞
-                    </div>
+                    <div style={styles.mvLabel}>＜16:9＞</div>
                   </div>
                 </div>
 
                 {/* 画面列 */}
                 <div style={styles.screenColumn}>
-                  <div style={styles.columnHeader}>
-                    画面
-                  </div>
+                  <div style={styles.columnHeader}>画面</div>
                   <div style={styles.framesContainer}>
                     {page.images.map((img, cutIdx) => (
                       <div key={cutIdx} style={styles.frameRow}>
                         <div
-                          style={{
-                            ...styles.frame,
-                            ...(hoveredFrame === `${pageIdx}-${cutIdx}` ? styles.frameHover : {})
-                          }}
+                          style={{ ...styles.frame, ...(hoveredFrame === `${pageIdx}-${cutIdx}` ? styles.frameHover : {}) }}
                           onClick={(e) => handleFrameClick(pageIdx, cutIdx, e)}
                           onMouseEnter={() => setHoveredFrame(`${pageIdx}-${cutIdx}`)}
                           onMouseLeave={() => setHoveredFrame(null)}
@@ -1274,7 +1596,6 @@ const StoryboardViewer = ({
                           onDrop={() => {
                             if (!draggedCut || (draggedCut.pageIdx === pageIdx && draggedCut.cutIdx === cutIdx)) return;
                             setPages(prev => {
-                              // 1. 全カットをフラットな配列に
                               const flatCuts = prev.flatMap((page, pIdx) =>
                                 page.images.map((imgs, cIdx) => ({
                                   images: imgs,
@@ -1285,13 +1606,10 @@ const StoryboardViewer = ({
                                   blendFile: page.blendFiles[cIdx]
                                 }))
                               );
-                              // 2. 移動元と移動先のインデックスを計算
                               const fromIdx = draggedCut.pageIdx * 5 + draggedCut.cutIdx;
                               const toIdx = pageIdx * 5 + cutIdx;
-                              // 3. カットを移動
                               const [moved] = flatCuts.splice(fromIdx, 1);
                               flatCuts.splice(toIdx, 0, moved);
-                              // 4. ページに再分割
                               return regroupPagesFromFlatCuts(flatCuts);
                             });
                             setDraggedCut(null);
@@ -1304,11 +1622,7 @@ const StoryboardViewer = ({
                             return (
                               <>
                                 {currentImage ? (
-                                  <img
-                                    src={currentImage}
-                                    alt={`Frame ${pageIdx * 5 + cutIdx + 1}`}
-                                    style={styles.frameImage}
-                                  />
+                                  <img src={currentImage} alt={`Frame ${pageIdx * 5 + cutIdx + 1}`} style={styles.frameImage} />
                                 ) : (
                                   <div style={styles.framePlaceholder}>
                                     <div style={styles.placeholderContent}>
@@ -1318,91 +1632,14 @@ const StoryboardViewer = ({
                                     </div>
                                   </div>
                                 )}
-                                
-                                {/* 複数画像がある場合のみ左右ボタンを表示 */}
+
                                 {!isExportingPDF && !areButtonsHidden && cutImages.filter(img => img !== null).length > 1 && (
                                   <>
-                                    {/* 左ボタン */}
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleChangeImageIndex(pageIdx, cutIdx, -1);
-                                      }}
-                                      style={{
-                                        position: 'absolute',
-                                        left: '4px',
-                                        top: '50%',
-                                        transform: 'translateY(-50%)',
-                                        width: '32px',
-                                        height: '32px',
-                                        background: 'rgba(0, 0, 0, 0.5)',
-                                        color: 'white',
-                                        border: 'none',
-                                        borderRadius: '50%',
-                                        fontSize: '18px',
-                                        cursor: 'pointer',
-                                        zIndex: 10,
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        padding: 0,
-                                        transition: 'background 0.2s'
-                                      }}
-                                      onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(0, 0, 0, 0.7)'}
-                                      onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(0, 0, 0, 0.5)'}
-                                      title="前の画像"
-                                    >
-                                      ◀
-                                    </button>
-                                    
-                                    {/* 右ボタン */}
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleChangeImageIndex(pageIdx, cutIdx, 1);
-                                      }}
-                                      style={{
-                                        position: 'absolute',
-                                        right: '4px',
-                                        top: '50%',
-                                        transform: 'translateY(-50%)',
-                                        width: '32px',
-                                        height: '32px',
-                                        background: 'rgba(0, 0, 0, 0.5)',
-                                        color: 'white',
-                                        border: 'none',
-                                        borderRadius: '50%',
-                                        fontSize: '18px',
-                                        cursor: 'pointer',
-                                        zIndex: 10,
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        padding: 0,
-                                        transition: 'background 0.2s'
-                                      }}
-                                      onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(0, 0, 0, 0.7)'}
-                                      onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(0, 0, 0, 0.5)'}
-                                      title="次の画像"
-                                    >
-                                      ▶
-                                    </button>
-                                    
-                                    {/* 画像インジケーター */}
-                                    <div style={{
-                                      position: 'absolute',
-                                      bottom: '4px',
-                                      left: '50%',
-                                      transform: 'translateX(-50%)',
-                                      background: 'rgba(0, 0, 0, 0.6)',
-                                      color: 'white',
-                                      padding: '2px 8px',
-                                      borderRadius: '12px',
-                                      fontSize: '11px',
-                                      zIndex: 10
-                                    }}>
+                                    <button type="button" onClick={(e) => { e.stopPropagation(); handleChangeImageIndex(pageIdx, cutIdx, -1); }}
+                                      style={{ position: 'absolute', left: '4px', top: '50%', transform: 'translateY(-50%)', width: '32px', height: '32px', background: 'rgba(0,0,0,0.5)', color: 'white', border: 'none', borderRadius: '50%', fontSize: '18px', cursor: 'pointer', zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>◀</button>
+                                    <button type="button" onClick={(e) => { e.stopPropagation(); handleChangeImageIndex(pageIdx, cutIdx, 1); }}
+                                      style={{ position: 'absolute', right: '4px', top: '50%', transform: 'translateY(-50%)', width: '32px', height: '32px', background: 'rgba(0,0,0,0.5)', color: 'white', border: 'none', borderRadius: '50%', fontSize: '18px', cursor: 'pointer', zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>▶</button>
+                                    <div style={{ position: 'absolute', bottom: '4px', left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.6)', color: 'white', padding: '2px 8px', borderRadius: '12px', fontSize: '11px', zIndex: 10 }}>
                                       {currentIdx + 1} / {cutImages.filter(img => img !== null).length}
                                     </div>
                                   </>
@@ -1410,354 +1647,121 @@ const StoryboardViewer = ({
                               </>
                             );
                           })()}
-                          
-                          {/* 画像追加ボタン */}
+
                           {!isExportingPDF && !areButtonsHidden && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                const input = document.createElement('input');
-                                input.type = 'file';
-                                input.accept = 'image/jpeg, image/png';
-                                input.onchange = (ev) => handleImageUpload(pageIdx, cutIdx, ev, true);
-                                input.click();
-                              }}
-                              style={{
-                                position: 'absolute',
-                                top: '4px',
-                                right: '4px',
-                                width: '28px',
-                                height: '28px',
-                                background: '#10b981',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '50%',
-                                fontSize: '18px',
-                                cursor: 'pointer',
-                                zIndex: 10,
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                padding: 0,
-                                transition: 'background 0.2s'
-                              }}
-                              onMouseEnter={(e) => e.currentTarget.style.background = '#059669'}
-                              onMouseLeave={(e) => e.currentTarget.style.background = '#10b981'}
-                              title="画像を追加"
-                            >
-                              +
-                            </button>
+                            <button type="button"
+                              onClick={(e) => { e.stopPropagation(); const input = document.createElement('input'); input.type = 'file'; input.accept = 'image/jpeg, image/png'; input.onchange = (ev) => handleImageUpload(pageIdx, cutIdx, ev, true); input.click(); }}
+                              style={{ position: 'absolute', top: '4px', right: '4px', width: '28px', height: '28px', background: '#10b981', color: 'white', border: 'none', borderRadius: '50%', fontSize: '18px', cursor: 'pointer', zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
+                              title="画像を追加">+</button>
                           )}
-                          
-                          {/* 画像削除ボタン（画像がある場合のみ表示） */}
+
                           {!isExportingPDF && !areButtonsHidden && (() => {
                             const cutImages = page.images[cutIdx];
                             const currentIdx = page.imageIndices[cutIdx];
                             const currentImage = cutImages[currentIdx];
                             return currentImage && (
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  if (window.confirm('この画像を削除しますか？')) {
-                                    handleDeleteCurrentImage(pageIdx, cutIdx);
-                                  }
-                                }}
-                                style={{
-                                  position: 'absolute',
-                                  top: '4px',
-                                  left: '4px',
-                                  width: '28px',
-                                  height: '28px',
-                                  background: '#ef4444',
-                                  color: 'white',
-                                  border: 'none',
-                                  borderRadius: '50%',
-                                  fontSize: '16px',
-                                  cursor: 'pointer',
-                                  zIndex: 10,
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                  padding: 0,
-                                  transition: 'background 0.2s'
-                                }}
-                                onMouseEnter={(e) => e.currentTarget.style.background = '#dc2626'}
-                                onMouseLeave={(e) => e.currentTarget.style.background = '#ef4444'}
-                                title="この画像を削除"
-                              >
-                                ×
-                              </button>
+                              <button type="button"
+                                onClick={(e) => { e.stopPropagation(); if (window.confirm('この画像を削除しますか？')) { handleDeleteCurrentImage(pageIdx, cutIdx); } }}
+                                style={{ position: 'absolute', top: '4px', left: '4px', width: '28px', height: '28px', background: '#ef4444', color: 'white', border: 'none', borderRadius: '50%', fontSize: '16px', cursor: 'pointer', zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
+                                title="この画像を削除">×</button>
                             );
                           })()}
-                          
-                          {/* AI補助ボタン */}
+
                           {!isExportingPDF && !areButtonsHidden && (
-                            <AIAssistButton
-                              pageIdx={pageIdx}
-                              cutIdx={cutIdx}
-                              onAIAssist={handleAIAssist}
-                            />
+                            <AIAssistButton pageIdx={pageIdx} cutIdx={cutIdx} onAIAssist={handleAIAssist} />
                           )}
-                          
-                          {/* 削除ボタン */}
+
                           {!isExportingPDF && !areButtonsHidden && (
-                            <button
-                              type="button"
-                              onClick={e => {
-                                e.stopPropagation();
-                                handleDeleteCut(pageIdx, cutIdx);
-                              }}
-                              style={{
-                                position: 'absolute',
-                                top: '130px',
-                                right: '-280px',
-                                width: '22px',
-                                height: '22px',
-                                background: '#ef4444',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '50%',
-                                fontSize: '14px',
-                                cursor: 'pointer',
-                                zIndex: 10,
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                padding: 0
-                              }}
-                              title="このカットを削除"
-                            >
-                              ✕
-                            </button>
+                            <button type="button"
+                              onClick={e => { e.stopPropagation(); handleDeleteCut(pageIdx, cutIdx); }}
+                              style={{ position: 'absolute', top: '130px', right: '-280px', width: '22px', height: '22px', background: '#ef4444', color: 'white', border: 'none', borderRadius: '50%', fontSize: '14px', cursor: 'pointer', zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
+                              title="このカットを削除">✕</button>
                           )}
-                          {/* 右外に＋ボタン */}
+
                           {!isExportingPDF && !areButtonsHidden && (
-                            <button
-                              type="button"
+                            <button type="button"
                               onClick={() => { handleAddCutAt(pageIdx, cutIdx); }}
-                              style={{
-                                position: 'absolute',
-                                right: '-210px',
-                                top: '-5%',
-                                transform: 'translateY(-50%)',
-                                zIndex: 1000,
-                                width: '24px',
-                                height: '24px',
-                                background: 'none',
-                                border: 'none',
-                                color: '#3730a3',
-                                fontSize: '22px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                padding: 0,
-                                boxShadow: 'none',
-                              }}
-                              title="ここにカットを追加"
-                            >
-                              ＋
-                            </button>
+                              style={{ position: 'absolute', right: '-210px', top: '-5%', transform: 'translateY(-50%)', zIndex: 1000, width: '24px', height: '24px', background: 'none', border: 'none', color: '#3730a3', fontSize: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, boxShadow: 'none' }}
+                              title="ここにカットを追加">＋</button>
                           )}
-                          {/* Blenderファイルアタッチ・開くボタン */}
+
                           {!isExportingPDF && !areButtonsHidden && (
                             <>
-                              <input
-                                type="file"
-                                accept=".blend"
-                                style={{ display: 'none' }}
+                              <input type="file" accept=".blend" style={{ display: 'none' }}
                                 id={`blend-input-${pageIdx}-${cutIdx}`}
                                 onClick={(e) => e.stopPropagation()}
-                                onChange={e => {
-                                  if (e.target.files && e.target.files[0]) {
-                                    handleBlendFileChange(pageIdx, cutIdx, e.target.files[0]);
-                                  }
-                                }}
-                              />
-                              <label
-                                htmlFor={`blend-input-${pageIdx}-${cutIdx}`}
+                                onChange={e => { if (e.target.files && e.target.files[0]) { handleBlendFileChange(pageIdx, cutIdx, e.target.files[0]); } }} />
+                              <label htmlFor={`blend-input-${pageIdx}-${cutIdx}`}
                                 title={page.blendFiles[cutIdx] ? `紐付け: ${page.blendFiles[cutIdx]}` : '.blendファイルを紐付け'}
-                                style={{
-                                  position: 'absolute',
-                                  right: '-18px',
-                                  bottom: '140px',
-                                  width: '20px',
-                                  height: '20px',
-                                  background: page.blendFiles[cutIdx] ? '#10b981' : '#e5e7eb',
-                                  borderRadius: '50%',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                  boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
-                                  cursor: 'pointer',
-                                  border: '1px solid #d1d5db',
-                                  zIndex: 2
-                                }}
-                                onClick={(e) => e.stopPropagation()}
-                              >
+                                style={{ position: 'absolute', right: '-18px', bottom: '140px', width: '20px', height: '20px', background: page.blendFiles[cutIdx] ? '#10b981' : '#e5e7eb', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 1px 4px rgba(0,0,0,0.08)', cursor: 'pointer', border: '1px solid #d1d5db', zIndex: 2 }}
+                                onClick={(e) => e.stopPropagation()}>
                                 <span style={{ fontSize: '12px', color: page.blendFiles[cutIdx] ? 'white' : '#6b7280' }}>🗎</span>
                               </label>
-                              {/* Blenderファイルを開くボタン */}
                               {page.blendFiles[cutIdx] && (
-                                <label
-                                  title="紐付けたファイルを開く"
-                                  style={{
-                                    position: 'absolute',
-                                    right: '-18px',
-                                    bottom: '4px',
-                                    width: '20px',
-                                    height: '20px',
-                                    background: '#3b82f6',
-                                    borderRadius: '50%',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
-                                    cursor: 'pointer',
-                                    border: '1px solid #d1d5db',
-                                    zIndex: 2
-                                  }}
+                                <label title="紐付けたファイルを開く"
+                                  style={{ position: 'absolute', right: '-18px', bottom: '4px', width: '20px', height: '20px', background: '#3b82f6', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 1px 4px rgba(0,0,0,0.08)', cursor: 'pointer', border: '1px solid #d1d5db', zIndex: 2 }}
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     if (window.webUtils && window.webUtils.openFile) {
                                       window.webUtils.openFile(page.blendFiles[cutIdx]);
                                     } else {
-                                      console.warn("window.webUtils.openFile is not available.");
                                       alert(`ファイルを開く機能は現在利用できません。\n\n紐付けファイル: ${page.blendFiles[cutIdx]}`);
                                     }
-                                  }}
-                                >
+                                  }}>
                                   <span style={{ fontSize: '14px', color: 'white' }}>🔗</span>
                                 </label>
                               )}
                             </>
                           )}
                         </div>
-                        {/* フレーム番号 */}
                         <div style={styles.frameNumber}>{pageIdx * 5 + cutIdx + 1}</div>
-                        {/* 各フレームの下に横線を追加 */}
                         <div style={styles.horizontalLine}></div>
                       </div>
                     ))}
-                    {/* 最後のフレームの後ろにも＋ボタン */}
+
                     {!isExportingPDF && !areButtonsHidden && (
                       <div style={{ position: 'relative', height: 0 }}>
-                        <button
-                          type="button"
+                        <button type="button"
                           onClick={() => handleAddCutAt(pageIdx, page.images.length)}
-                          style={{
-                            position: 'absolute',
-                            right: '-40px',
-                            top: '0',
-                            zIndex: 30,
-                            width: '24px',
-                            height: '24px',
-                            background: 'none',
-                            border: 'none',
-                            color: '#3730a3',
-                            fontSize: '22px',
-                            cursor: page.images.length >= 5 ? 'not-allowed' : 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            padding: 0,
-                            pointerEvents: page.images.length >= 5 ? 'none' : 'auto',
-                            boxShadow: 'none',
-                          }}
+                          style={{ position: 'absolute', right: '-40px', top: '0', zIndex: 30, width: '24px', height: '24px', background: 'none', border: 'none', color: '#3730a3', fontSize: '22px', cursor: page.images.length >= 5 ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, pointerEvents: page.images.length >= 5 ? 'none' : 'auto', boxShadow: 'none' }}
                           title="ここにカットを追加"
-                          disabled={page.images.length >= 5}
-                        >
-                          ＋
-                        </button>
+                          disabled={page.images.length >= 5}>＋</button>
                       </div>
                     )}
                   </div>
                 </div>
 
-                {/* 面列 */}
+                {/* 内容列 */}
                 <div style={styles.faceColumn}>
-                  <div style={{ ...styles.columnHeader, ...styles.faceHeader }}>
-                    内容
-                  </div>
+                  <div style={{ ...styles.columnHeader, ...styles.faceHeader }}>内容</div>
                   <div style={styles.faceContent}>
                     {[0, 1, 2, 3, 4].map((cutIdx) => (
                       <div key={cutIdx} style={styles.faceInputRow}>
                         {isExportingPDF ? (
-                          // PDF用: テキストだけをきれいに表示
-                          <div style={{
-                            width: '100%',
-                            minHeight: '40px',
-                            fontSize: '13px',
-                            color: '#222',
-                            background: 'none',
-                            border: 'none',
-                            padding: '4px 8px',
-                            marginBottom: '6px',
-                            whiteSpace: 'pre-line',
-                            wordBreak: 'break-word',
-                          }}>
+                          <div style={{ width: '100%', minHeight: '40px', fontSize: '13px', color: '#222', background: 'none', border: 'none', padding: '4px 8px', marginBottom: '6px', whiteSpace: 'pre-line', wordBreak: 'break-word' }}>
                             {page.faceTexts[cutIdx] || <span style={{ color: '#bbb' }}>内容...</span>}
                           </div>
                         ) : (
-                          <textarea
-                            style={styles.faceInput}
+                          <textarea style={styles.faceInput}
                             value={page.faceTexts[cutIdx]}
                             onChange={(e) => handleTextChange(pageIdx, cutIdx, e.target.value)}
-                            placeholder="内容..."
-                            rows={1}
-                          />
+                            placeholder="内容..." rows={1} />
                         )}
                         <div style={{ display: 'flex', alignItems: 'center' }}>
                           {isExportingPDF ? (
-                            <div style={{
-                              width: '100%',
-                              minHeight: '40px',
-                              fontSize: '13px',
-                              color: '#374151',
-                              background: 'none',
-                              border: 'none',
-                              padding: '4px 8px',
-                              whiteSpace: 'pre-line',
-                              wordBreak: 'break-word',
-                            }}>
+                            <div style={{ width: '100%', minHeight: '40px', fontSize: '13px', color: '#374151', background: 'none', border: 'none', padding: '4px 8px', whiteSpace: 'pre-line', wordBreak: 'break-word' }}>
                               {page.dialogueTexts[cutIdx] || <span style={{ color: '#bbb' }}>セリフ...</span>}
                             </div>
                           ) : (
                             <>
-                              <textarea
-                                style={{ ...styles.faceInput, marginBottom: 0, flex: 1 }}
+                              <textarea style={{ ...styles.faceInput, marginBottom: 0, flex: 1 }}
                                 value={page.dialogueTexts[cutIdx]}
                                 onChange={(e) => handleDialogueChange(pageIdx, cutIdx, e.target.value)}
-                                placeholder="セリフ..."
-                                rows={1}
-                              />
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (window.speechSynthesis) {
-                                    const utter = new window.SpeechSynthesisUtterance(page.dialogueTexts[cutIdx]);
-                                    utter.lang = 'ja-JP';
-                                    window.speechSynthesis.speak(utter);
-                                  }
-                                }}
-                                style={{
-                                  marginLeft: '4px',
-                                  background: '#f3f4f6',
-                                  border: '1px solid #d1d5db',
-                                  borderRadius: '3px',
-                                  padding: '1px 2px',
-                                  cursor: 'pointer',
-                                  fontSize: '12px',
-                                  color: '#374151',
-                                  lineHeight: 1,
-                                  minWidth: '22px',
-                                  minHeight: '22px'
-                                }}
-                                title="セリフを読み上げる"
-                              >
-                                🔊
-                              </button>
+                                placeholder="セリフ..." rows={1} />
+                              <button type="button"
+                                onClick={() => { if (window.speechSynthesis) { const utter = new window.SpeechSynthesisUtterance(page.dialogueTexts[cutIdx]); utter.lang = 'ja-JP'; window.speechSynthesis.speak(utter); } }}
+                                style={{ marginLeft: '4px', background: '#f3f4f6', border: '1px solid #d1d5db', borderRadius: '3px', padding: '1px 2px', cursor: 'pointer', fontSize: '12px', color: '#374151', lineHeight: 1, minWidth: '22px', minHeight: '22px' }}
+                                title="セリフを読み上げる">🔊</button>
                             </>
                           )}
                         </div>
@@ -1769,22 +1773,15 @@ const StoryboardViewer = ({
 
               {/* 右側のセクション */}
               <div style={styles.rightSection}>
-                {/* 分・秒列 */}
                 <div style={styles.timeColumn}>
-                  <div style={styles.columnHeader}>
-                    秒
-                  </div>
+                  <div style={styles.columnHeader}>秒</div>
                   <div style={styles.timeContent}>
                     {[0, 1, 2, 3, 4].map((cutIdx) => (
                       <div key={cutIdx} style={styles.timeInputRow}>
-                        <input
-                          type="text"
-                          style={styles.timeInput}
+                        <input type="text" style={styles.timeInput}
                           value={page.timeValues[cutIdx]}
                           onChange={(e) => handleTimeChange(pageIdx, cutIdx, e.target.value)}
-                          placeholder="0.0"
-                          inputMode="decimal"
-                        />
+                          placeholder="0.0" inputMode="decimal" />
                       </div>
                     ))}
                   </div>
@@ -1794,25 +1791,14 @@ const StoryboardViewer = ({
           </div>
         ))}
 
-        {/* 下部の番号と＋ボタン */}
+        {/* 下部の＋ボタン */}
         <div style={styles.footerNumber}>
-          <button
-            onClick={handleAddPage}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: '#2563eb',
-              fontSize: '24px',
-              cursor: 'pointer',
-              padding: 0
-            }}
-            title="ページを追加"
-          >
-            ＋
-          </button>
+          <button onClick={handleAddPage}
+            style={{ background: 'none', border: 'none', color: '#2563eb', fontSize: '24px', cursor: 'pointer', padding: 0 }}
+            title="ページを追加">＋</button>
         </div>
       </div>
-      
+
       {/* AI補助パネル */}
       <StoryboardAIPanel
         isVisible={aiPanelVisible}
@@ -1820,7 +1806,7 @@ const StoryboardViewer = ({
         pages={pages}
         onClose={() => setAiPanelVisible(false)}
         onFrameGenerated={handleAIFrameGenerated}
-        onFrameUpdated={() => {}} // 将来の機能用
+        onFrameUpdated={() => {}}
       />
     </div>
   );
