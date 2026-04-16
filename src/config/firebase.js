@@ -4,16 +4,14 @@ import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import { getFirestore, enableNetwork, disableNetwork } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 
-// Firebase configuration object
-// ここにFirebase コンソールから取得した設定を入力してください
 const firebaseConfig = {
-  apiKey: "AIzaSyCcpp3x-n8W-4j6WWnDQabL0uiQ--hN2J8",
-  authDomain: "storyboard-bd947.firebaseapp.com",
-  projectId: "storyboard-bd947",
-  storageBucket: "storyboard-bd947.firebasestorage.app",
-  messagingSenderId: "7525645081",
-  appId: "1:7525645081:web:c928603364a9f161e2e388",
-  measurementId: "G-SVYFRY8FDJ"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
 };
 
 // Initialize Firebase
