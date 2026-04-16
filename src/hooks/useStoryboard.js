@@ -18,6 +18,30 @@ import { useAuth } from './useAuth';
 const COLLECTION_NAME = 'storyboards';
 const DEBOUNCE_DELAY = 1000; // 1秒のデバウンス
 
+// Firestoreはネスト配列非サポートのため、images（配列の配列）をオブジェクト配列に変換
+const serializePages = (pages) => {
+  if (!Array.isArray(pages)) return pages;
+  return pages.map(page => ({
+    ...page,
+    images: Array.isArray(page.images)
+      ? page.images.map(imgArray => ({ urls: Array.isArray(imgArray) ? imgArray : [imgArray] }))
+      : page.images
+  }));
+};
+
+// Firestoreから読み込んだデータを元の形式に戻す
+const deserializePages = (pages) => {
+  if (!Array.isArray(pages)) return pages;
+  return pages.map(page => ({
+    ...page,
+    images: Array.isArray(page.images)
+      ? page.images.map(imgObj =>
+          Array.isArray(imgObj) ? imgObj : (imgObj?.urls || [null])
+        )
+      : page.images
+  }));
+};
+
 export const useStoryboard = () => {
   const { user } = useAuth();
   const [storyboards, setStoryboards] = useState([]);
@@ -46,12 +70,16 @@ export const useStoryboard = () => {
     const unsubscribe = onSnapshot(
       query(userStoryboardsRef, orderBy('updatedAt', 'desc')),
       (snapshot) => {
-        const storyboardList = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data(),
-          createdAt: doc.data().createdAt?.toDate(),
-          updatedAt: doc.data().updatedAt?.toDate()
-        }));
+        const storyboardList = snapshot.docs.map(doc => {
+          const data = doc.data();
+          return {
+            id: doc.id,
+            ...data,
+            pages: deserializePages(data.pages),
+            createdAt: data.createdAt?.toDate(),
+            updatedAt: data.updatedAt?.toDate()
+          };
+        });
         
         setStoryboards(storyboardList);
         setLoading(false);
@@ -86,6 +114,7 @@ export const useStoryboard = () => {
           setCurrentStoryboard({
             id: snapshot.id,
             ...data,
+            pages: deserializePages(data.pages),
             createdAt: data.createdAt?.toDate(),
             updatedAt: data.updatedAt?.toDate()
           });
@@ -112,7 +141,7 @@ export const useStoryboard = () => {
       
       const storyboardData = {
         name: name || '新しい絵コンテ',
-        pages: initialPages,
+        pages: serializePages(initialPages),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
         createdBy: user.uid,
@@ -154,7 +183,7 @@ export const useStoryboard = () => {
         const currentVersion = currentDoc.exists() ? (currentDoc.data().version || 1) : 1;
 
         const updateData = {
-          pages,
+          pages: serializePages(pages),
           updatedAt: serverTimestamp(),
           version: currentVersion + 1
         };
