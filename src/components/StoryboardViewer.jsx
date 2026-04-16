@@ -459,6 +459,27 @@ const StoryboardViewer = ({
     }
   };
 
+  const handleStopwatchReset = () => {
+    setIsStopwatchRunning(false);
+    setStopwatchStart(null);
+    setStopwatchTime(null);
+  };
+
+  // カットの画像をすべてクリア（カット自体は残す）
+  const handleClearCutImages = (pageIdx, cutIdx) => {
+    if (!window.confirm(`カット ${pageIdx * 5 + cutIdx + 1} の画像をすべて削除しますか？\n（カット枠は残ります）`)) return;
+    setPages(prev => {
+      const newPages = [...prev];
+      const page = newPages[pageIdx];
+      newPages[pageIdx] = {
+        ...page,
+        images: page.images.map((imgs, idx) => idx === cutIdx ? [null] : imgs),
+        imageIndices: page.imageIndices.map((v, idx) => idx === cutIdx ? 0 : v)
+      };
+      return newPages;
+    });
+  };
+
   // Fキーでボタン表示切り替え
   useEffect(() => {
     const handleKeyPress = (e) => {
@@ -1069,22 +1090,45 @@ const StoryboardViewer = ({
               disabled={isPlaying} style={{ margin: 0 }} />
             セリフ読み上げ
           </label>
+        </div>
 
-          {/* ストップウォッチ（コンパクト） */}
+        {/* ---- モバイル ストップウォッチ 右下オーバーレイ ---- */}
+        <div style={{
+          position: 'fixed',
+          bottom: '20px', right: '14px',
+          zIndex: 500,
+          display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px'
+        }}>
           <button
             onClick={handleStopwatchClick}
             style={{
-              marginLeft: 'auto',
-              padding: '6px 10px',
+              padding: '7px 11px',
               background: isStopwatchRunning ? '#dc2626' : '#2563eb',
-              color: 'white', border: 'none', borderRadius: '6px',
-              fontSize: '12px', cursor: 'pointer', fontFamily: 'inherit',
-              display: 'flex', alignItems: 'center', gap: '4px'
+              color: 'white', border: 'none', borderRadius: '20px',
+              fontSize: '13px', fontWeight: 600,
+              cursor: 'pointer', fontFamily: 'inherit',
+              display: 'flex', alignItems: 'center', gap: '5px',
+              boxShadow: '0 2px 10px rgba(0,0,0,0.25)'
             }}
             title="タイム計測"
           >
-            ⏱ {isStopwatchRunning ? '...' : (stopwatchTime ? `${stopwatchTime}s` : '0.00')}
+            ⏱ {isStopwatchRunning ? '計測中' : (stopwatchTime ? `${stopwatchTime}s` : '0.00')}
           </button>
+          {(stopwatchTime !== null || isStopwatchRunning) && (
+            <button
+              onClick={handleStopwatchReset}
+              style={{
+                padding: '3px 10px',
+                background: 'rgba(100,116,139,0.85)',
+                color: 'white', border: 'none', borderRadius: '12px',
+                fontSize: '11px', cursor: 'pointer', fontFamily: 'inherit',
+                boxShadow: '0 1px 4px rgba(0,0,0,0.2)'
+              }}
+              title="ゼロに戻す"
+            >
+              ↺ リセット
+            </button>
+          )}
         </div>
 
         {/* ---- カットリスト ---- */}
@@ -1128,6 +1172,21 @@ const StoryboardViewer = ({
                   </span>
                   <span style={{ marginLeft: '6px', fontSize: '10px', color: '#94a3b8' }}>長押しで並び替え</span>
                   <div style={{ marginLeft: 'auto', display: 'flex', gap: '6px' }}>
+                    {/* 画像クリアボタン（画像がある場合のみ） */}
+                    {cutImages.some(img => img !== null) && (
+                      <button
+                        onClick={() => handleClearCutImages(pageIdx, cutIdx)}
+                        style={{
+                          padding: '4px 8px', fontSize: '11px',
+                          background: '#fff7ed', color: '#c2410c',
+                          border: '1px solid #fed7aa', borderRadius: '5px',
+                          cursor: 'pointer', fontFamily: 'inherit'
+                        }}
+                        title="このカットの画像をすべて削除"
+                      >
+                        🗑
+                      </button>
+                    )}
                     <button
                       onClick={() => handleAIAssist(pageIdx, cutIdx)}
                       style={{
@@ -1139,7 +1198,6 @@ const StoryboardViewer = ({
                     >
                       AI
                     </button>
-                    {/* 一時的に非表示: カット削除ボタン (削除)
                     <button
                       onClick={() => {
                         if (window.confirm(`カット ${globalIdx + 1} を削除しますか？`)) {
@@ -1155,7 +1213,6 @@ const StoryboardViewer = ({
                     >
                       削除
                     </button>
-                    */}
                   </div>
                 </div>
 
@@ -1488,25 +1545,46 @@ const StoryboardViewer = ({
         )}
       </div>
 
-      {/* ストップウォッチ丸ボタン（固定） */}
-      <button
-        onClick={handleStopwatchClick}
-        style={{
-          width: '56px', height: '56px', borderRadius: '50%',
-          background: '#2563eb', color: 'white', border: 'none',
-          fontSize: '14px', fontWeight: 600,
-          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.06)', cursor: 'pointer', fontFamily: 'inherit',
-          position: 'fixed', top: '50%', right: '32px', transform: 'translateY(-50%)',
-          outline: 'none', userSelect: 'none', transition: 'background 0.2s', zIndex: 2000,
-        }}
-        title="クリックで計測開始/停止"
-      >
-        <span style={{ fontSize: '12px', marginBottom: '2px' }}>タイム</span>
-        <span style={{ fontSize: '15px', fontWeight: 700 }}>
-          {isStopwatchRunning ? '...' : stopwatchTime ? stopwatchTime : '0.00'}
-        </span>
-      </button>
+      {/* ストップウォッチ（デスクトップ固定） */}
+      <div style={{
+        position: 'fixed', top: '50%', right: '24px', transform: 'translateY(-50%)',
+        zIndex: 2000, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px'
+      }}>
+        <button
+          onClick={handleStopwatchClick}
+          style={{
+            width: '56px', height: '56px', borderRadius: '50%',
+            background: isStopwatchRunning ? '#dc2626' : '#2563eb',
+            color: 'white', border: 'none',
+            fontSize: '14px', fontWeight: 600,
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.15)', cursor: 'pointer', fontFamily: 'inherit',
+            outline: 'none', userSelect: 'none', transition: 'background 0.2s',
+          }}
+          title="クリックで計測開始/停止"
+        >
+          <span style={{ fontSize: '11px', marginBottom: '1px' }}>タイム</span>
+          <span style={{ fontSize: '14px', fontWeight: 700 }}>
+            {isStopwatchRunning ? '...' : stopwatchTime ? stopwatchTime : '0.00'}
+          </span>
+        </button>
+        {(stopwatchTime !== null || isStopwatchRunning) && (
+          <button
+            onClick={handleStopwatchReset}
+            style={{
+              padding: '3px 8px',
+              background: 'rgba(100,116,139,0.85)',
+              color: 'white', border: 'none', borderRadius: '10px',
+              fontSize: '11px', cursor: 'pointer', fontFamily: 'inherit',
+              boxShadow: '0 1px 4px rgba(0,0,0,0.15)',
+              whiteSpace: 'nowrap'
+            }}
+            title="ゼロに戻す"
+          >
+            ↺ リセット
+          </button>
+        )}
+      </div>
 
       {/* 再生コントロール */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '16px', margin: '16px 0' }}>
@@ -1721,6 +1799,18 @@ const StoryboardViewer = ({
                                 onClick={(e) => { e.stopPropagation(); if (window.confirm('この画像を削除しますか？')) { handleDeleteCurrentImage(pageIdx, cutIdx); } }}
                                 style={{ position: 'absolute', top: '4px', left: '4px', width: '28px', height: '28px', background: '#ef4444', color: 'white', border: 'none', borderRadius: '50%', fontSize: '16px', cursor: 'pointer', zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
                                 title="この画像を削除">×</button>
+                            );
+                          })()}
+
+                          {/* 全画像クリアボタン（画像がある場合のみ） */}
+                          {!isExportingPDF && !areButtonsHidden && (() => {
+                            const cutImages = page.images[cutIdx];
+                            const hasAnyImage = cutImages.some(img => img !== null);
+                            return hasAnyImage && (
+                              <button type="button"
+                                onClick={(e) => { e.stopPropagation(); handleClearCutImages(pageIdx, cutIdx); }}
+                                style={{ position: 'absolute', bottom: '4px', left: '4px', height: '22px', background: 'rgba(194,65,12,0.85)', color: 'white', border: 'none', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 6px', whiteSpace: 'nowrap' }}
+                                title="このカットの画像をすべて削除">🗑</button>
                             );
                           })()}
 
