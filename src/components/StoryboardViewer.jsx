@@ -2,67 +2,215 @@ import React, { useState, useRef, useEffect } from 'react';
 import ExportPDFButton from './ExportPDFButton';
 import AIAssistButton from './ai-assistant/AIAssistButton';
 import StoryboardAIPanel from './ai-assistant/StoryboardAIPanel';
+import { useAuth } from '../hooks/useAuth';
+import { useStoryboard } from '../hooks/useStoryboard';
+import { uploadImage, isBase64DataURL, migrateBase64ToStorage } from '../services/storage-service';
 
 const EMPTY_PAGE = () => ({
-  images: [null, null, null, null, null],
+  images: [[null], [null], [null], [null], [null]], // 各カットに複数画像を持てるよう配列の配列に
+  imageIndices: [0, 0, 0, 0, 0], // 各カットで現在表示中の画像インデックス
   faceTexts: ['', '', '', '', ''],
   dialogueTexts: ['', '', '', '', ''],
   timeValues: ['', '', '', '', ''],
   blendFiles: ['', '', '', '', '']
 });
 
-const StoryboardViewer = () => {
-  const [pages, setPages] = useState([EMPTY_PAGE()]);
+const StoryboardViewer = ({ 
+  storyboardId, 
+  initialPages = [EMPTY_PAGE()], 
+  storyboardName: initialName = '' 
+}) => {
+  const { user } = useAuth();
+  const { saveStoryboard } = useStoryboard();
+  
+  const [pages, setPages] = useState(initialPages);
   const exportRef = useRef(null);
   const pageRefs = useRef([]); // 各ページごとのref
   const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackMode, setPlaybackMode] = useState('auto'); // 'auto' | 'manual'
   const [currentFrame, setCurrentFrame] = useState(0);
   const [isAutoSpeak, setIsAutoSpeak] = useState(false);
   const [hoveredFrame, setHoveredFrame] = useState(null);
   const [isStopwatchRunning, setIsStopwatchRunning] = useState(false);
   const [stopwatchStart, setStopwatchStart] = useState(null);
   const [stopwatchTime, setStopwatchTime] = useState(null);
-  const [storyboardName, setStoryboardName] = useState('');
+  const [storyboardName, setStoryboardName] = useState(initialName);
   const [draggedCut, setDraggedCut] = useState(null);
   const [isExportingPDF, setIsExportingPDF] = useState(false); // PDFエクスポート中フラグ
+  const [areButtonsHidden, setAreButtonsHidden] = useState(false); // ボタン非表示フラグ
   
   // AI補助機能用のstate
   const [aiPanelVisible, setAiPanelVisible] = useState(false);
   const [selectedAIFrame, setSelectedAIFrame] = useState(null);
+  
+  // Firebase Storage関連のstate
+  const [uploadingImages, setUploadingImages] = useState(new Set());
+  const [imageUploadProgress, setImageUploadProgress] = useState({});
 
-  // ページ・カット指定で画像アップロード
-  const handleImageUpload = (pageIdx, cutIdx, event) => {
-    const file = event.target.files[0];
-    if (file && (file.type === 'image/jpeg' || file.type === 'image/png')) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        // 画像をリサイズして保存
-        const img = new window.Image();
-        img.onload = () => {
-          const MAX_WIDTH = 512;
-          const scale = MAX_WIDTH / img.width;
-          const width = MAX_WIDTH;
-          const height = Math.round(img.height * scale);
-          const canvas = document.createElement('canvas');
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(img, 0, 0, width, height);
-          // JPEG圧縮率0.7
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
-          setPages(prev => {
-            const newPages = [...prev];
-            newPages[pageIdx] = {
-              ...newPages[pageIdx],
-              images: newPages[pageIdx].images.map((img, idx) => idx === cutIdx ? dataUrl : img)
-            };
-            return newPages;
-          });
-        };
-        img.src = e.target.result;
-      };
-      reader.readAsDataURL(file);
+  // 初期データの同期
+  useEffect(() => {
+    if (initialPages && initialPages.length > 0) {
+      setPages(initialPages);
     }
+  }, [initialPages]);
+
+  // ストーリーボード名の同期
+  useEffect(() => {
+    if (initialName) {
+      setStoryboardName(initialName);
+    }
+  }, [initialName]);
+
+  // 自動保存機能（ページデータが変更された時）
+  useEffect(() => {
+    if (storyboardId && user && pages.length > 0) {
+      // 初期データと同じ場合はスキップ
+      if (JSON.stringify(pages) === JSON.stringify(initialPages)) {
+        return;
+      }
+      
+      console.log('ページデータ変更を検知、自動保存を実行');
+      saveStoryboard(storyboardId, pages, storyboardName);
+    }
+  }, [pages, storyboardId, user, saveStoryboard]);
+
+  // ストーリーボード名が変更された時の自動保存
+  useEffect(() => {
+    if (storyboardId && user && storyboardName !== initialName) {
+      console.log('ストーリーボード名変更を検知、自動保存を実行');
+      saveStoryboard(storyboardId, pages, storyboardName);
+    }
+  }, [storyboardName, storyboardId, user, pages, saveStoryboard, initialName]);
+
+  // ページ・カット指定で画像アップロード（Firebase Storage版）
+  const handleImageUpload = async (pageIdx, cutIdx, event, addNew = false) => {
+    const file = event.target.files[0];
+    if (!file || !user) return;
+
+    if (file.type !== 'image/jpeg' && file.type !== 'image/png') {
+      alert('JPEGまたはPNG形式の画像のみアップロード可能です');
+      return;
+    }
+
+    const uploadKey = `${pageIdx}-${cutIdx}`;
+    
+    try {
+      // アップロード開始
+      setUploadingImages(prev => new Set(prev).add(uploadKey));
+      setImageUploadProgress(prev => ({ ...prev, [uploadKey]: 0 }));
+
+      // Firebase Storageにアップロード
+      const frameId = `page${pageIdx}_cut${cutIdx}_${Date.now()}`;
+      const uploadResult = await uploadImage(file, user.uid, frameId);
+
+      console.log('画像アップロード完了:', uploadResult);
+
+      // ページ状態を更新
+      setPages(prev => {
+        const newPages = [...prev];
+        const page = newPages[pageIdx];
+        const cutImages = [...page.images[cutIdx]];
+        const currentIdx = page.imageIndices[cutIdx];
+        
+        if (addNew) {
+          // 新規追加：配列の最後に追加し、そのインデックスに移動
+          cutImages.push(uploadResult.url);
+          const newImageIndices = [...page.imageIndices];
+          newImageIndices[cutIdx] = cutImages.length - 1;
+          newPages[pageIdx] = {
+            ...page,
+            images: page.images.map((imgs, idx) => idx === cutIdx ? cutImages : imgs),
+            imageIndices: newImageIndices
+          };
+        } else {
+          // 現在の画像を置き換え（nullの場合は最初の要素に）
+          if (cutImages[currentIdx] === null) {
+            cutImages[currentIdx] = uploadResult.url;
+          } else {
+            cutImages[currentIdx] = uploadResult.url;
+          }
+          newPages[pageIdx] = {
+            ...page,
+            images: page.images.map((imgs, idx) => idx === cutIdx ? cutImages : imgs)
+          };
+        }
+        return newPages;
+      });
+
+      setImageUploadProgress(prev => ({ ...prev, [uploadKey]: 100 }));
+      
+    } catch (error) {
+      console.error('画像アップロードエラー:', error);
+      alert(`画像アップロードに失敗しました: ${error.message}`);
+    } finally {
+      // アップロード終了
+      setUploadingImages(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(uploadKey);
+        return newSet;
+      });
+      setTimeout(() => {
+        setImageUploadProgress(prev => {
+          const newProgress = { ...prev };
+          delete newProgress[uploadKey];
+          return newProgress;
+        });
+      }, 2000);
+    }
+  };
+
+  // 画像インデックスを変更（左右ボタン用）
+  const handleChangeImageIndex = (pageIdx, cutIdx, direction) => {
+    setPages(prev => {
+      const newPages = [...prev];
+      const page = newPages[pageIdx];
+      const cutImages = page.images[cutIdx];
+      const currentIdx = page.imageIndices[cutIdx];
+      
+      let newIdx = currentIdx + direction;
+      // ループ処理
+      if (newIdx < 0) newIdx = cutImages.length - 1;
+      if (newIdx >= cutImages.length) newIdx = 0;
+      
+      const newImageIndices = [...page.imageIndices];
+      newImageIndices[cutIdx] = newIdx;
+      newPages[pageIdx] = {
+        ...page,
+        imageIndices: newImageIndices
+      };
+      return newPages;
+    });
+  };
+
+  // 現在の画像を削除
+  const handleDeleteCurrentImage = (pageIdx, cutIdx) => {
+    setPages(prev => {
+      const newPages = [...prev];
+      const page = newPages[pageIdx];
+      const cutImages = [...page.images[cutIdx]];
+      const currentIdx = page.imageIndices[cutIdx];
+      
+      // 画像が1枚しかない場合はnullに置き換え
+      if (cutImages.filter(img => img !== null).length <= 1) {
+        cutImages[currentIdx] = null;
+        newPages[pageIdx] = {
+          ...page,
+          images: page.images.map((imgs, idx) => idx === cutIdx ? cutImages : imgs)
+        };
+      } else {
+        // 複数ある場合は削除して前のインデックスに移動
+        cutImages.splice(currentIdx, 1);
+        const newIdx = Math.max(0, Math.min(currentIdx, cutImages.length - 1));
+        const newImageIndices = [...page.imageIndices];
+        newImageIndices[cutIdx] = newIdx;
+        newPages[pageIdx] = {
+          ...page,
+          images: page.images.map((imgs, idx) => idx === cutIdx ? cutImages : imgs),
+          imageIndices: newImageIndices
+        };
+      }
+      return newPages;
+    });
   };
 
   // ページ・カット指定で画像選択
@@ -124,11 +272,16 @@ const StoryboardViewer = () => {
   };
 
   // blendファイル紐付け
-  const handleBlendFileChange = (pageIdx, cutIdx, files) => {
-    if (files && files.length > 0) {
-      const file = files[0];
-      // Electron 29以降推奨の方法
-      const filePath = window.webUtils.getPathForFile(file);
+  const handleBlendFileChange = (pageIdx, cutIdx, file) => {
+    if (file) {
+      // Electron環境ではフルパス、Web環境ではファイル名のみを取得
+      let filePath;
+      if (window.webUtils && window.webUtils.getPathForFile) {
+        filePath = window.webUtils.getPathForFile(file);
+      } else {
+        // Web環境ではファイル名のみ保存
+        filePath = file.name;
+      }
       console.log('blendファイル紐付け:', filePath);
 
       setPages(prev => {
@@ -145,15 +298,19 @@ const StoryboardViewer = () => {
   };
   // 全ページ・全カットをフラットにまとめる
   const flatCuts = pages.flatMap((page, pageIdx) =>
-    [0, 1, 2, 3, 4].map(cutIdx => ({
-      image: page.images[cutIdx],
-      faceText: page.faceTexts[cutIdx],
-      dialogueText: page.dialogueTexts[cutIdx],
-      timeValue: page.timeValues[cutIdx],
-      blendFile: page.blendFiles[cutIdx],
-      pageIdx,
-      cutIdx
-    }))
+    [0, 1, 2, 3, 4].map(cutIdx => {
+      const currentImageIdx = page.imageIndices[cutIdx];
+      const currentImage = page.images[cutIdx][currentImageIdx];
+      return {
+        image: currentImage,
+        faceText: page.faceTexts[cutIdx],
+        dialogueText: page.dialogueTexts[cutIdx],
+        timeValue: page.timeValues[cutIdx],
+        blendFile: page.blendFiles[cutIdx],
+        pageIdx,
+        cutIdx
+      };
+    })
   );
   const totalCuts = flatCuts.length;
 
@@ -170,9 +327,10 @@ const StoryboardViewer = () => {
     if (window.speechSynthesis) window.speechSynthesis.cancel();
   };
 
-  // 再生ロジック（全ページ対応）
+  // 自動送り（全ページ対応）
   useEffect(() => {
     if (!isPlaying) return;
+    if (playbackMode !== 'auto') return;
     if (currentFrame >= totalCuts) {
       setIsPlaying(false);
       if (window.speechSynthesis) window.speechSynthesis.cancel();
@@ -180,17 +338,67 @@ const StoryboardViewer = () => {
     }
     let sec = parseFloat(flatCuts[currentFrame].timeValue);
     if (isNaN(sec) || sec <= 0) sec = 1;
-    if (isAutoSpeak && window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-      const utter = new window.SpeechSynthesisUtterance(flatCuts[currentFrame].dialogueText);
-      utter.lang = 'ja-JP';
-      window.speechSynthesis.speak(utter);
-    }
     const timer = setTimeout(() => {
       setCurrentFrame((prev) => prev + 1);
     }, sec * 1000);
     return () => clearTimeout(timer);
-  }, [isPlaying, currentFrame, flatCuts, isAutoSpeak]);
+  }, [isPlaying, playbackMode, currentFrame, flatCuts, totalCuts]);
+
+  // セリフ自動再生（自動/手動共通）
+  useEffect(() => {
+    if (!isPlaying) return;
+    if (!isAutoSpeak) return;
+    if (!window.speechSynthesis) return;
+    if (!flatCuts[currentFrame]) return;
+    const text = (flatCuts[currentFrame].dialogueText || '').trim();
+    if (!text) return;
+
+    window.speechSynthesis.cancel();
+    const utter = new window.SpeechSynthesisUtterance(text);
+    utter.lang = 'ja-JP';
+    window.speechSynthesis.speak(utter);
+
+    return () => {
+      // 次の発話や停止時にキャンセルされるが、念のため
+      try {
+        window.speechSynthesis.cancel();
+      } catch {
+        // ignore
+      }
+    };
+  }, [isPlaying, isAutoSpeak, currentFrame, flatCuts]);
+
+  // 手動再生: 矢印キーでフレーム移動
+  useEffect(() => {
+    if (!isPlaying) return;
+    if (playbackMode !== 'manual') return;
+
+    const isTypingTarget = (target) => {
+      if (!target) return false;
+      const tag = target.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+      if (target.isContentEditable) return true;
+      return false;
+    };
+
+    const onKeyDown = (e) => {
+      if (isTypingTarget(e.target)) return;
+
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        setCurrentFrame((prev) => Math.min(prev + 1, Math.max(0, totalCuts - 1)));
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        setCurrentFrame((prev) => Math.max(prev - 1, 0));
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        handleStop();
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isPlaying, playbackMode, totalCuts]);
 
   // ページ追加
   const handleAddPage = () => {
@@ -212,7 +420,28 @@ const StoryboardViewer = () => {
     try {
       const data = localStorage.getItem('storyboardPages');
       if (data) {
-        setPages(JSON.parse(data));
+        const loadedPages = JSON.parse(data);
+        // 古い形式から新しい形式に変換
+        const convertedPages = loadedPages.map(page => {
+          // 古い形式（images が単一の値の配列）を検出
+          if (page.images && Array.isArray(page.images) && page.images.length > 0) {
+            const isOldFormat = !Array.isArray(page.images[0]);
+            if (isOldFormat) {
+              // 古い形式を新しい形式に変換
+              return {
+                ...page,
+                images: page.images.map(img => [img]),
+                imageIndices: page.imageIndices || [0, 0, 0, 0, 0]
+              };
+            }
+          }
+          // すでに新しい形式の場合はそのまま
+          return {
+            ...page,
+            imageIndices: page.imageIndices || [0, 0, 0, 0, 0]
+          };
+        });
+        setPages(convertedPages);
         alert('読み込みました！');
       } else {
         alert('保存データがありません');
@@ -236,6 +465,24 @@ const StoryboardViewer = () => {
       }
     }
   };
+
+  // Fキーでボタン表示切り替え
+  useEffect(() => {
+    const handleKeyPress = (e) => {
+      // 入力中の場合はスキップ（textareaやinputにフォーカスがある場合）
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+        return;
+      }
+      
+      if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        setAreButtonsHidden(prev => !prev);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyPress);
+    return () => window.removeEventListener('keydown', handleKeyPress);
+  }, []);
 
   // JSONエクスポート
   const handleExport = () => {
@@ -262,13 +509,38 @@ const StoryboardViewer = () => {
     reader.onload = (event) => {
       try {
         const imported = JSON.parse(event.target.result);
+        let pagesData = [];
+        
         if (imported.pages && Array.isArray(imported.pages)) {
-          setPages(imported.pages);
+          pagesData = imported.pages;
           setStoryboardName(imported.name || '');
         } else if (Array.isArray(imported)) {
-          setPages(imported);
+          pagesData = imported;
           setStoryboardName('');
         }
+        
+        // 古い形式から新しい形式に変換
+        const convertedPages = pagesData.map(page => {
+          // 古い形式（images が単一の値の配列）を検出
+          if (page.images && Array.isArray(page.images) && page.images.length > 0) {
+            const isOldFormat = !Array.isArray(page.images[0]);
+            if (isOldFormat) {
+              // 古い形式を新しい形式に変換
+              return {
+                ...page,
+                images: page.images.map(img => [img]),
+                imageIndices: page.imageIndices || [0, 0, 0, 0, 0]
+              };
+            }
+          }
+          // すでに新しい形式の場合はそのまま
+          return {
+            ...page,
+            imageIndices: page.imageIndices || [0, 0, 0, 0, 0]
+          };
+        });
+        
+        setPages(convertedPages);
         alert('インポートしました！');
       } catch {
         alert('インポートに失敗しました');
@@ -284,7 +556,8 @@ const StoryboardViewer = () => {
       const group = flatCuts.slice(i, i + 5);
       while (group.length < 5) {
         group.push({
-          image: null,
+          images: [null],
+          imageIndex: 0,
           faceText: '',
           dialogueText: '',
           timeValue: '',
@@ -292,7 +565,8 @@ const StoryboardViewer = () => {
         });
       }
       pages.push({
-        images: group.map(c => c.image),
+        images: group.map(c => c.images || [c.image || null]),
+        imageIndices: group.map(c => c.imageIndex || 0),
         faceTexts: group.map(c => c.faceText),
         dialogueTexts: group.map(c => c.dialogueText),
         timeValues: group.map(c => c.timeValue),
@@ -309,25 +583,30 @@ const StoryboardViewer = () => {
       let page = { ...newPages[pageIdx] };
       // 各配列に空要素を挿入
       page.images = [...page.images];
+      page.imageIndices = [...page.imageIndices];
       page.faceTexts = [...page.faceTexts];
       page.dialogueTexts = [...page.dialogueTexts];
       page.timeValues = [...page.timeValues];
       page.blendFiles = [...page.blendFiles];
       // 挿入
-      page.images.splice(insertIdx, 0, null);
+      page.images.splice(insertIdx, 0, [null]);
+      page.imageIndices.splice(insertIdx, 0, 0);
       page.faceTexts.splice(insertIdx, 0, '');
       page.dialogueTexts.splice(insertIdx, 0, '');
       page.timeValues.splice(insertIdx, 0, '');
       page.blendFiles.splice(insertIdx, 0, '');
 
       // 空でないカットのみをカウント
-      const isFilled = (i) => (
-        page.images[i] !== null ||
-        page.faceTexts[i] !== '' ||
-        page.dialogueTexts[i] !== '' ||
-        page.timeValues[i] !== '' ||
-        page.blendFiles[i] !== ''
-      );
+      const isFilled = (i) => {
+        const hasImage = page.images[i] && page.images[i].some(img => img !== null);
+        return (
+          hasImage ||
+          page.faceTexts[i] !== '' ||
+          page.dialogueTexts[i] !== '' ||
+          page.timeValues[i] !== '' ||
+          page.blendFiles[i] !== ''
+        );
+      };
 
       // 空でないカットのインデックスを取得
       let filledIndexes = [];
@@ -342,6 +621,7 @@ const StoryboardViewer = () => {
         // 溢れた分を抽出
         const overflow = {
           images: [],
+          imageIndices: [],
           faceTexts: [],
           dialogueTexts: [],
           timeValues: [],
@@ -351,6 +631,7 @@ const StoryboardViewer = () => {
         for (let i = overflowIndexes.length - 1; i >= 0; i--) {
           const idx = overflowIndexes[i];
           overflow.images.unshift(page.images.splice(idx, 1)[0]);
+          overflow.imageIndices.unshift(page.imageIndices.splice(idx, 1)[0]);
           overflow.faceTexts.unshift(page.faceTexts.splice(idx, 1)[0]);
           overflow.dialogueTexts.unshift(page.dialogueTexts.splice(idx, 1)[0]);
           overflow.timeValues.unshift(page.timeValues.splice(idx, 1)[0]);
@@ -360,6 +641,7 @@ const StoryboardViewer = () => {
         if (newPages[pageIdx + 1]) {
           let nextPage = { ...newPages[pageIdx + 1] };
           nextPage.images = [...overflow.images, ...nextPage.images];
+          nextPage.imageIndices = [...overflow.imageIndices, ...nextPage.imageIndices];
           nextPage.faceTexts = [...overflow.faceTexts, ...nextPage.faceTexts];
           nextPage.dialogueTexts = [...overflow.dialogueTexts, ...nextPage.dialogueTexts];
           nextPage.timeValues = [...overflow.timeValues, ...nextPage.timeValues];
@@ -376,7 +658,8 @@ const StoryboardViewer = () => {
         } else {
           // 新しいページを作成
           const EMPTY = () => ({
-            images: [null, null, null, null, null],
+            images: [[null], [null], [null], [null], [null]],
+            imageIndices: [0, 0, 0, 0, 0],
             faceTexts: ['', '', '', '', ''],
             dialogueTexts: ['', '', '', '', ''],
             timeValues: ['', '', '', '', ''],
@@ -385,6 +668,7 @@ const StoryboardViewer = () => {
           const newPage = EMPTY();
           for (let i = 0; i < overflow.images.length; i++) {
             newPage.images[i] = overflow.images[i];
+            newPage.imageIndices[i] = overflow.imageIndices[i];
             newPage.faceTexts[i] = overflow.faceTexts[i];
             newPage.dialogueTexts[i] = overflow.dialogueTexts[i];
             newPage.timeValues[i] = overflow.timeValues[i];
@@ -408,7 +692,8 @@ const StoryboardViewer = () => {
     };
     return {
       ...page,
-      images: fill(page.images, null),
+      images: fill(page.images, [null]),
+      imageIndices: fill(page.imageIndices || [], 0),
       faceTexts: fill(page.faceTexts, ''),
       dialogueTexts: fill(page.dialogueTexts, ''),
       timeValues: fill(page.timeValues, ''),
@@ -426,11 +711,16 @@ const StoryboardViewer = () => {
   const handleAIFrameGenerated = (pageIdx, cutIdx, imageData) => {
     setPages(prev => {
       const newPages = [...prev];
+      const page = newPages[pageIdx];
+      const cutImages = [...page.images[cutIdx]];
+      const currentIdx = page.imageIndices[cutIdx];
+      
+      // 現在のインデックスに画像を設定
+      cutImages[currentIdx] = imageData;
+      
       newPages[pageIdx] = {
-        ...newPages[pageIdx],
-        images: newPages[pageIdx].images.map((img, idx) => 
-          idx === cutIdx ? imageData : img
-        )
+        ...page,
+        images: page.images.map((imgs, idx) => idx === cutIdx ? cutImages : imgs)
       };
       return newPages;
     });
@@ -441,8 +731,9 @@ const StoryboardViewer = () => {
     setPages(prev => {
       // 全カットをフラット化
       const flatCuts = prev.flatMap((page) =>
-        page.images.map((img, cIdx) => ({
-          image: img,
+        page.images.map((imgs, cIdx) => ({
+          images: imgs,
+          imageIndex: page.imageIndices[cIdx],
           faceText: page.faceTexts[cIdx],
           dialogueText: page.dialogueTexts[cIdx],
           timeValue: page.timeValues[cIdx],
@@ -659,6 +950,37 @@ const StoryboardViewer = () => {
       {/* PDF保存ボタンとストップウォッチを横並びに */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '16px', margin: '16px 0' }}>
         <ExportPDFButton targetRef={exportRef} pageRefs={pageRefs} pages={pages} setIsExportingPDF={setIsExportingPDF} />
+        
+        {/* ボタン表示切り替えボタン */}
+        <button
+          onClick={() => setAreButtonsHidden(!areButtonsHidden)}
+          style={{
+            padding: '6px 12px',
+            fontSize: '13px',
+            background: areButtonsHidden ? '#ef4444' : '#6b7280',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            transition: 'background 0.2s'
+          }}
+          title={areButtonsHidden ? 'ボタンを表示 (Fキー)' : 'ボタンを非表示 (Fキー)'}
+        >
+          <span style={{ fontSize: '16px' }}>{areButtonsHidden ? '👁️' : '🙈'}</span>
+          <span>{areButtonsHidden ? 'ボタン表示' : 'ボタン非表示'}</span>
+          <span style={{ 
+            fontSize: '11px', 
+            opacity: 0.8, 
+            marginLeft: '2px',
+            background: 'rgba(0,0,0,0.2)',
+            padding: '1px 4px',
+            borderRadius: '3px'
+          }}>F</span>
+        </button>
       </div>
       {/* ストップウォッチ丸ボタンを画面中央右に固定配置 */}
       <button
@@ -701,6 +1023,34 @@ const StoryboardViewer = () => {
       </button>
       {/* 再生ボタンとセリフ自動再生チェックボックス */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '16px', margin: '16px 0' }}>
+        {/* 再生モード切り替え */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontSize: '12px', color: '#6b7280' }}>再生</span>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: '#374151', userSelect: 'none', lineHeight: 1 }}>
+            <input
+              type="radio"
+              name="playbackMode"
+              value="auto"
+              checked={playbackMode === 'auto'}
+              onChange={() => setPlaybackMode('auto')}
+              disabled={isPlaying}
+              style={{ transform: 'scale(0.9)', margin: 0 }}
+            />
+            自動
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: '#374151', userSelect: 'none', lineHeight: 1 }}>
+            <input
+              type="radio"
+              name="playbackMode"
+              value="manual"
+              checked={playbackMode === 'manual'}
+              onChange={() => setPlaybackMode('manual')}
+              disabled={isPlaying}
+              style={{ transform: 'scale(0.9)', margin: 0 }}
+            />
+            手動（←/→）
+          </label>
+        </div>
         <button
           onClick={handlePlay}
           disabled={isPlaying}
@@ -818,8 +1168,13 @@ const StoryboardViewer = () => {
             />
           )}
           <div style={{ marginTop: '12px', fontSize: '18px', color: '#374151' }}>
-            {currentFrame + 1}枚目 / {parseFloat(flatCuts[currentFrame].timeValue) || 1}秒
+            {currentFrame + 1}枚目 / {playbackMode === 'auto' ? `${parseFloat(flatCuts[currentFrame].timeValue) || 1}秒` : '手動'}
           </div>
+          {playbackMode === 'manual' && (
+            <div style={{ marginTop: '6px', fontSize: '13px', color: '#6b7280' }}>
+              ←/→で移動（Escで停止）
+            </div>
+          )}
         </div>
       )}
       <div style={styles.wrapper} ref={exportRef}>
@@ -921,8 +1276,9 @@ const StoryboardViewer = () => {
                             setPages(prev => {
                               // 1. 全カットをフラットな配列に
                               const flatCuts = prev.flatMap((page, pIdx) =>
-                                page.images.map((img, cIdx) => ({
-                                  image: img,
+                                page.images.map((imgs, cIdx) => ({
+                                  images: imgs,
+                                  imageIndex: page.imageIndices[cIdx],
                                   faceText: page.faceTexts[cIdx],
                                   dialogueText: page.dialogueTexts[cIdx],
                                   timeValue: page.timeValues[cIdx],
@@ -941,24 +1297,203 @@ const StoryboardViewer = () => {
                             setDraggedCut(null);
                           }}
                         >
-                          {img ? (
-                            <img
-                              src={img}
-                              alt={`Frame ${pageIdx * 5 + cutIdx + 1}`}
-                              style={styles.frameImage}
-                            />
-                          ) : (
-                            <div style={styles.framePlaceholder}>
-                              <div style={styles.placeholderContent}>
-                                <svg style={styles.plusIcon} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                                </svg>
-                              </div>
-                            </div>
+                          {(() => {
+                            const cutImages = page.images[cutIdx];
+                            const currentIdx = page.imageIndices[cutIdx];
+                            const currentImage = cutImages[currentIdx];
+                            return (
+                              <>
+                                {currentImage ? (
+                                  <img
+                                    src={currentImage}
+                                    alt={`Frame ${pageIdx * 5 + cutIdx + 1}`}
+                                    style={styles.frameImage}
+                                  />
+                                ) : (
+                                  <div style={styles.framePlaceholder}>
+                                    <div style={styles.placeholderContent}>
+                                      <svg style={styles.plusIcon} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                                      </svg>
+                                    </div>
+                                  </div>
+                                )}
+                                
+                                {/* 複数画像がある場合のみ左右ボタンを表示 */}
+                                {!isExportingPDF && !areButtonsHidden && cutImages.filter(img => img !== null).length > 1 && (
+                                  <>
+                                    {/* 左ボタン */}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleChangeImageIndex(pageIdx, cutIdx, -1);
+                                      }}
+                                      style={{
+                                        position: 'absolute',
+                                        left: '4px',
+                                        top: '50%',
+                                        transform: 'translateY(-50%)',
+                                        width: '32px',
+                                        height: '32px',
+                                        background: 'rgba(0, 0, 0, 0.5)',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '50%',
+                                        fontSize: '18px',
+                                        cursor: 'pointer',
+                                        zIndex: 10,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        padding: 0,
+                                        transition: 'background 0.2s'
+                                      }}
+                                      onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(0, 0, 0, 0.7)'}
+                                      onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(0, 0, 0, 0.5)'}
+                                      title="前の画像"
+                                    >
+                                      ◀
+                                    </button>
+                                    
+                                    {/* 右ボタン */}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleChangeImageIndex(pageIdx, cutIdx, 1);
+                                      }}
+                                      style={{
+                                        position: 'absolute',
+                                        right: '4px',
+                                        top: '50%',
+                                        transform: 'translateY(-50%)',
+                                        width: '32px',
+                                        height: '32px',
+                                        background: 'rgba(0, 0, 0, 0.5)',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '50%',
+                                        fontSize: '18px',
+                                        cursor: 'pointer',
+                                        zIndex: 10,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        padding: 0,
+                                        transition: 'background 0.2s'
+                                      }}
+                                      onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(0, 0, 0, 0.7)'}
+                                      onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(0, 0, 0, 0.5)'}
+                                      title="次の画像"
+                                    >
+                                      ▶
+                                    </button>
+                                    
+                                    {/* 画像インジケーター */}
+                                    <div style={{
+                                      position: 'absolute',
+                                      bottom: '4px',
+                                      left: '50%',
+                                      transform: 'translateX(-50%)',
+                                      background: 'rgba(0, 0, 0, 0.6)',
+                                      color: 'white',
+                                      padding: '2px 8px',
+                                      borderRadius: '12px',
+                                      fontSize: '11px',
+                                      zIndex: 10
+                                    }}>
+                                      {currentIdx + 1} / {cutImages.filter(img => img !== null).length}
+                                    </div>
+                                  </>
+                                )}
+                              </>
+                            );
+                          })()}
+                          
+                          {/* 画像追加ボタン */}
+                          {!isExportingPDF && !areButtonsHidden && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const input = document.createElement('input');
+                                input.type = 'file';
+                                input.accept = 'image/jpeg, image/png';
+                                input.onchange = (ev) => handleImageUpload(pageIdx, cutIdx, ev, true);
+                                input.click();
+                              }}
+                              style={{
+                                position: 'absolute',
+                                top: '4px',
+                                right: '4px',
+                                width: '28px',
+                                height: '28px',
+                                background: '#10b981',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '50%',
+                                fontSize: '18px',
+                                cursor: 'pointer',
+                                zIndex: 10,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                padding: 0,
+                                transition: 'background 0.2s'
+                              }}
+                              onMouseEnter={(e) => e.currentTarget.style.background = '#059669'}
+                              onMouseLeave={(e) => e.currentTarget.style.background = '#10b981'}
+                              title="画像を追加"
+                            >
+                              +
+                            </button>
                           )}
                           
+                          {/* 画像削除ボタン（画像がある場合のみ表示） */}
+                          {!isExportingPDF && !areButtonsHidden && (() => {
+                            const cutImages = page.images[cutIdx];
+                            const currentIdx = page.imageIndices[cutIdx];
+                            const currentImage = cutImages[currentIdx];
+                            return currentImage && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (window.confirm('この画像を削除しますか？')) {
+                                    handleDeleteCurrentImage(pageIdx, cutIdx);
+                                  }
+                                }}
+                                style={{
+                                  position: 'absolute',
+                                  top: '4px',
+                                  left: '4px',
+                                  width: '28px',
+                                  height: '28px',
+                                  background: '#ef4444',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '50%',
+                                  fontSize: '16px',
+                                  cursor: 'pointer',
+                                  zIndex: 10,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  padding: 0,
+                                  transition: 'background 0.2s'
+                                }}
+                                onMouseEnter={(e) => e.currentTarget.style.background = '#dc2626'}
+                                onMouseLeave={(e) => e.currentTarget.style.background = '#ef4444'}
+                                title="この画像を削除"
+                              >
+                                ×
+                              </button>
+                            );
+                          })()}
+                          
                           {/* AI補助ボタン */}
-                          {!isExportingPDF && (
+                          {!isExportingPDF && !areButtonsHidden && (
                             <AIAssistButton
                               pageIdx={pageIdx}
                               cutIdx={cutIdx}
@@ -967,7 +1502,7 @@ const StoryboardViewer = () => {
                           )}
                           
                           {/* 削除ボタン */}
-                          {!isExportingPDF && (
+                          {!isExportingPDF && !areButtonsHidden && (
                             <button
                               type="button"
                               onClick={e => {
@@ -998,7 +1533,7 @@ const StoryboardViewer = () => {
                             </button>
                           )}
                           {/* 右外に＋ボタン */}
-                          {!isExportingPDF && (
+                          {!isExportingPDF && !areButtonsHidden && (
                             <button
                               type="button"
                               onClick={() => { handleAddCutAt(pageIdx, cutIdx); }}
@@ -1026,7 +1561,7 @@ const StoryboardViewer = () => {
                             </button>
                           )}
                           {/* Blenderファイルアタッチ・開くボタン */}
-                          {!isExportingPDF && (
+                          {!isExportingPDF && !areButtonsHidden && (
                             <>
                               <input
                                 type="file"
@@ -1089,7 +1624,7 @@ const StoryboardViewer = () => {
                                       window.webUtils.openFile(page.blendFiles[cutIdx]);
                                     } else {
                                       console.warn("window.webUtils.openFile is not available.");
-                                      alert("ファイルを開く機能は現在利用できません。");
+                                      alert(`ファイルを開く機能は現在利用できません。\n\n紐付けファイル: ${page.blendFiles[cutIdx]}`);
                                     }
                                   }}
                                 >
@@ -1106,7 +1641,7 @@ const StoryboardViewer = () => {
                       </div>
                     ))}
                     {/* 最後のフレームの後ろにも＋ボタン */}
-                    {!isExportingPDF && (
+                    {!isExportingPDF && !areButtonsHidden && (
                       <div style={{ position: 'relative', height: 0 }}>
                         <button
                           type="button"
@@ -1259,7 +1794,7 @@ const StoryboardViewer = () => {
           </div>
         ))}
 
-        {/* 下部の番号と＋ボタン */}.
+        {/* 下部の番号と＋ボタン */}
         <div style={styles.footerNumber}>
           <button
             onClick={handleAddPage}
