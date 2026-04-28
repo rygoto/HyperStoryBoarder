@@ -2,6 +2,47 @@ import React from 'react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 
+// Firebase StorageなどのクロスオリジンURLをData URLに変換してimg.srcを差し替える
+const replaceImagesWithDataURLs = async (element) => {
+  const imgs = Array.from(element.querySelectorAll('img'));
+  const originals = [];
+
+  await Promise.all(imgs.map(async (img) => {
+    const src = img.getAttribute('src');
+    if (!src || src.startsWith('data:') || src.startsWith('blob:')) {
+      originals.push({ img, src });
+      return;
+    }
+    try {
+      const res = await fetch(src, { mode: 'cors', cache: 'force-cache' });
+      const blob = await res.blob();
+      const dataUrl = await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.readAsDataURL(blob);
+      });
+      originals.push({ img, src });
+      img.src = dataUrl;
+      // 新しいsrcが読み込まれるのを待つ
+      await new Promise((resolve) => {
+        if (img.complete) { resolve(); return; }
+        img.onload = resolve;
+        img.onerror = resolve;
+      });
+    } catch {
+      originals.push({ img, src });
+    }
+  }));
+
+  return originals;
+};
+
+const restoreImages = (originals) => {
+  for (const { img, src } of originals) {
+    img.src = src;
+  }
+};
+
 const ExportPDFButton = ({ pageRefs, pages, setIsExportingPDF }) => {
   const handleExport = async () => {
     if (!pageRefs || !pageRefs.current || pageRefs.current.length === 0) return;
@@ -12,10 +53,14 @@ const ExportPDFButton = ({ pageRefs, pages, setIsExportingPDF }) => {
     for (let i = 0; i < pages.length; i++) {
       const element = pageRefs.current[i];
       if (!element) continue;
+
+      // クロスオリジン画像をData URLに差し替えてCORS問題を回避
+      const originals = await replaceImagesWithDataURLs(element);
+
       const canvas = await html2canvas(element, {
         scale: 2,
-        useCORS: true,
-        allowTaint: true,
+        useCORS: false,
+        allowTaint: false,
         backgroundColor: '#ffffff',
         width: element.scrollWidth,
         height: element.scrollHeight,
@@ -27,6 +72,9 @@ const ExportPDFButton = ({ pageRefs, pages, setIsExportingPDF }) => {
         foreignObjectRendering: false,
         logging: false
       });
+
+      // 元のsrcに戻す
+      restoreImages(originals);
       const imgData = canvas.toDataURL('image/png', 1.0);
       const pdf = new jsPDF({
         orientation: 'portrait',
