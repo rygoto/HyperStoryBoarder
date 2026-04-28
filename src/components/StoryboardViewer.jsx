@@ -713,10 +713,12 @@ const StoryboardViewer = ({
     });
   };
 
-  // カット削除
+  // カット削除（カットそのものを削除し、以降のカットを繰り上げる）
   const handleDeleteCut = (pageIdx, cutIdx) => {
+    const globalCutNum = pageIdx * 5 + cutIdx + 1;
+    if (!window.confirm(`カット ${globalCutNum} を削除しますか？\nカット内のデータがすべて消え、以降のカットが繰り上がります。`)) return;
     setPages(prev => {
-      const flatCuts = prev.flatMap((page) =>
+      const flat = prev.flatMap((page) =>
         page.images.map((imgs, cIdx) => ({
           images: imgs,
           imageIndex: page.imageIndices[cIdx],
@@ -727,8 +729,9 @@ const StoryboardViewer = ({
         }))
       );
       const delIdx = pageIdx * 5 + cutIdx;
-      flatCuts.splice(delIdx, 1);
-      return regroupPagesFromFlatCuts(flatCuts);
+      flat.splice(delIdx, 1);
+      if (flat.length === 0) return [EMPTY_PAGE()];
+      return regroupPagesFromFlatCuts(flat);
     });
   };
 
@@ -1233,6 +1236,19 @@ const StoryboardViewer = ({
                         🗑
                       </button>
                     )}
+                    {/* カット削除ボタン */}
+                    <button
+                      onClick={() => handleDeleteCut(pageIdx, cutIdx)}
+                      style={{
+                        padding: '4px 8px', fontSize: '11px',
+                        background: '#ef4444', color: 'white',
+                        border: 'none', borderRadius: '5px',
+                        cursor: 'pointer', fontFamily: 'inherit'
+                      }}
+                      title="このカットを削除（以降のカットが繰り上がります）"
+                    >
+                      ✕
+                    </button>
                     <button
                       onClick={() => handleAIAssist(pageIdx, cutIdx)}
                       style={{
@@ -1808,23 +1824,14 @@ const StoryboardViewer = ({
                             <AIAssistButton pageIdx={pageIdx} cutIdx={cutIdx} onAIAssist={handleAIAssist} />
                           )}
 
-                          {/* 一時的に非表示: このカットを削除ボタン (✕)
+                          {/* カット削除ボタン（フレーム右下） */}
                           {!isExportingPDF && !areButtonsHidden && (
                             <button type="button"
                               onClick={e => { e.stopPropagation(); handleDeleteCut(pageIdx, cutIdx); }}
-                              style={{ position: 'absolute', top: '130px', right: '-280px', width: '22px', height: '22px', background: '#ef4444', color: 'white', border: 'none', borderRadius: '50%', fontSize: '14px', cursor: 'pointer', zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
-                              title="このカットを削除">✕</button>
+                              style={{ position: 'absolute', bottom: '4px', right: '4px', height: '22px', background: 'rgba(239,68,68,0.85)', color: 'white', border: 'none', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 6px', whiteSpace: 'nowrap' }}
+                              title="このカットを削除（以降のカットが繰り上がります）">✕</button>
                           )}
-                          */}
 
-                          {/* 一時的に非表示: ここにカットを追加ボタン (＋ カット間)
-                          {!isExportingPDF && !areButtonsHidden && (
-                            <button type="button"
-                              onClick={() => { handleAddCutAt(pageIdx, cutIdx); }}
-                              style={{ position: 'absolute', right: '-210px', top: '-5%', transform: 'translateY(-50%)', zIndex: 1000, width: '24px', height: '24px', background: 'none', border: 'none', color: '#3730a3', fontSize: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, boxShadow: 'none' }}
-                              title="ここにカットを追加">＋</button>
-                          )}
-                          */}
 
                           {!isExportingPDF && !areButtonsHidden && (
                             <>
