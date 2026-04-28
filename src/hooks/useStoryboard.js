@@ -237,6 +237,34 @@ export const useStoryboard = () => {
     }
   }, [user, currentStoryboard]);
 
+  // ストーリーボードのグループ・順番を更新
+  const updateStoryboardGroup = useCallback(async (storyboardId, group, order) => {
+    if (!user) throw new Error('ユーザーがログインしていません');
+
+    try {
+      setSaving(true);
+      const docRef = doc(db, COLLECTION_NAME, user.uid, 'projects', storyboardId);
+      const currentDoc = await getDoc(docRef);
+      const currentVersion = currentDoc.exists() ? (currentDoc.data().version || 1) : 1;
+
+      await setDoc(docRef, {
+        group: group ?? null,
+        order: order ?? null,
+        updatedAt: serverTimestamp(),
+        version: currentVersion + 1
+      }, { merge: true });
+
+      setLastSaved(new Date());
+      setError(null);
+    } catch (error) {
+      console.error('グループ更新エラー:', error);
+      setError(error.message);
+      throw error;
+    } finally {
+      setSaving(false);
+    }
+  }, [user]);
+
   // ストーリーボードを複製
   const duplicateStoryboard = useCallback(async (sourceStoryboardId, newName) => {
     if (!user) throw new Error('ユーザーがログインしていません');
@@ -253,7 +281,7 @@ export const useStoryboard = () => {
       const sourceData = sourceDoc.data();
       const newId = await createStoryboard(
         newName || `${sourceData.name}のコピー`,
-        sourceData.pages
+        deserializePages(sourceData.pages)
       );
       
       console.log('ストーリーボード複製完了:', newId);
@@ -323,6 +351,7 @@ export const useStoryboard = () => {
     duplicateStoryboard,
     importFromJSON,
     watchStoryboard,
+    updateStoryboardGroup,
     
     // Utils
     isConnected: !error,

@@ -1,0 +1,12 @@
+[
+  {
+    "origin": [
+      "https://hyper-story-boarder.vercel.app",
+      "http://localhost:5173",
+      "http://localhost:4173"
+    ],
+    "method": ["GET"],
+    "responseHeader": ["Content-Type", "Content-Length"],
+    "maxAgeSeconds": 3600
+  }
+]
