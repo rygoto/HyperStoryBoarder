@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import ExportPDFButton from './ExportPDFButton';
 import AIAssistButton from './ai-assistant/AIAssistButton';
 import StoryboardAIPanel from './ai-assistant/StoryboardAIPanel';
@@ -10,6 +10,7 @@ const EMPTY_PAGE = () => ({
   images: [[null], [null], [null], [null], [null]],
   imageIndices: [0, 0, 0, 0, 0],
   faceTexts: ['', '', '', '', ''],
+  drawingTexts: ['', '', '', '', ''],
   dialogueTexts: ['', '', '', '', ''],
   timeValues: ['', '', '', '', ''],
   blendFiles: ['', '', '', '', '']
@@ -46,6 +47,155 @@ const StoryboardViewer = ({
   // Firebase Storage関連のstate
   const [uploadingImages, setUploadingImages] = useState(new Set());
   const [imageUploadProgress, setImageUploadProgress] = useState({});
+
+  // 内容/作画 モード切り替え
+  const [contentMode, setContentMode] = useState('content'); // 'content' | 'drawing'
+
+  // 画像グレースケール切り替え
+  const [isGrayscale, setIsGrayscale] = useState(false);
+  const [gsContrast, setGsContrast] = useState(1.6);
+  const [gsBrightness, setGsBrightness] = useState(1.15);
+  const [gsAdjustOpen, setGsAdjustOpen] = useState(false);
+  const gsAdjustRef = useRef(null);
+
+  // 画像グレーオーバーレイ
+  const [isGrayOverlay, setIsGrayOverlay] = useState(false);
+  const [overlayOpacity, setOverlayOpacity] = useState(0.4);
+  const [overlayShade, setOverlayShade] = useState(128); // 0=黒 255=白
+  const [overlayAdjustOpen, setOverlayAdjustOpen] = useState(false);
+  const overlayAdjustRef = useRef(null);
+
+  // グレースケール調整パネルの外クリック閉じ
+  useEffect(() => {
+    if (!gsAdjustOpen) return;
+    const handler = (e) => {
+      if (gsAdjustRef.current && !gsAdjustRef.current.contains(e.target)) {
+        setGsAdjustOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [gsAdjustOpen]);
+
+  // グレーオーバーレイ調整パネルの外クリック閉じ
+  useEffect(() => {
+    if (!overlayAdjustOpen) return;
+    const handler = (e) => {
+      if (overlayAdjustRef.current && !overlayAdjustRef.current.contains(e.target)) {
+        setOverlayAdjustOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [overlayAdjustOpen]);
+
+  // 線画化
+  const [isLineArt, setIsLineArt] = useState(false);
+  const [lineArtThreshold, setLineArtThreshold] = useState(30);
+  const [lineArtAdjustOpen, setLineArtAdjustOpen] = useState(false);
+  const lineArtAdjustRef = useRef(null);
+  const lineArtCacheRef = useRef({});
+  const [lineArtCache, setLineArtCache] = useState({});
+  const lineArtProcessTimerRef = useRef(null);
+
+  // 線画化: crossOrigin成功→Sobel / CORS失敗→CSSフィルター代替
+  const processLineArtImage = useCallback((url, threshold) => {
+    const cacheKey = `${url}__${threshold}`;
+    if (lineArtCacheRef.current[cacheKey] !== undefined) return;
+    lineArtCacheRef.current[cacheKey] = 'loading';
+
+    const setCssFallback = () => {
+      lineArtCacheRef.current[cacheKey] = 'css-fallback';
+      setLineArtCache(prev => ({ ...prev, [cacheKey]: 'css-fallback' }));
+    };
+
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+
+    img.onload = () => {
+      const maxSize = 600;
+      const scale = Math.min(1, maxSize / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
+      const w = Math.round(img.naturalWidth * scale);
+      const h = Math.round(img.naturalHeight * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      try {
+        const { data } = ctx.getImageData(0, 0, w, h);
+        // グレースケール変換
+        const gray = new Float32Array(w * h);
+        for (let i = 0; i < gray.length; i++) {
+          gray[i] = 0.299 * data[i*4] + 0.587 * data[i*4+1] + 0.114 * data[i*4+2];
+        }
+        // ガウスぼかし 3x3
+        const k = [1/16, 2/16, 1/16, 2/16, 4/16, 2/16, 1/16, 2/16, 1/16];
+        const blurred = new Float32Array(w * h);
+        for (let y = 1; y < h-1; y++) {
+          for (let x = 1; x < w-1; x++) {
+            blurred[y*w+x] =
+              k[0]*gray[(y-1)*w+(x-1)] + k[1]*gray[(y-1)*w+x] + k[2]*gray[(y-1)*w+(x+1)] +
+              k[3]*gray[y*w+(x-1)]     + k[4]*gray[y*w+x]     + k[5]*gray[y*w+(x+1)]     +
+              k[6]*gray[(y+1)*w+(x-1)] + k[7]*gray[(y+1)*w+x] + k[8]*gray[(y+1)*w+(x+1)];
+          }
+        }
+        // Sobelエッジ検出 → 白背景・黒線
+        const out = new Uint8ClampedArray(w * h * 4);
+        for (let y = 0; y < h; y++) {
+          for (let x = 0; x < w; x++) {
+            let gx = 0, gy = 0;
+            if (y > 0 && y < h-1 && x > 0 && x < w-1) {
+              gx = -blurred[(y-1)*w+(x-1)] + blurred[(y-1)*w+(x+1)]
+                   - 2*blurred[y*w+(x-1)]   + 2*blurred[y*w+(x+1)]
+                   - blurred[(y+1)*w+(x-1)] + blurred[(y+1)*w+(x+1)];
+              gy = -blurred[(y-1)*w+(x-1)] - 2*blurred[(y-1)*w+x] - blurred[(y-1)*w+(x+1)]
+                   + blurred[(y+1)*w+(x-1)] + 2*blurred[(y+1)*w+x] + blurred[(y+1)*w+(x+1)];
+            }
+            const val = Math.sqrt(gx*gx + gy*gy) > threshold ? 0 : 255;
+            const o = (y*w+x)*4;
+            out[o] = out[o+1] = out[o+2] = val; out[o+3] = 255;
+          }
+        }
+        ctx.putImageData(new ImageData(out, w, h), 0, 0);
+        const dataURL = canvas.toDataURL('image/png');
+        lineArtCacheRef.current[cacheKey] = dataURL;
+        setLineArtCache(prev => ({ ...prev, [cacheKey]: dataURL }));
+      } catch(e) {
+        // getImageData失敗（tainted canvas）→ CSSフィルター代替
+        setCssFallback();
+      }
+    };
+
+    // CORS失敗 → CSSフィルター代替
+    img.onerror = setCssFallback;
+    img.src = url;
+  }, []);
+
+  // 線画化: isLineArt/threshold/pages変化時にデバウンスして処理
+  useEffect(() => {
+    if (!isLineArt) return;
+    clearTimeout(lineArtProcessTimerRef.current);
+    lineArtProcessTimerRef.current = setTimeout(() => {
+      pages.forEach(page => {
+        page.images.forEach(cutImages => {
+          cutImages.forEach(url => { if (url) processLineArtImage(url, lineArtThreshold); });
+        });
+      });
+    }, 300);
+    return () => clearTimeout(lineArtProcessTimerRef.current);
+  }, [isLineArt, lineArtThreshold, pages, processLineArtImage]);
+
+  // 線画化調整パネルの外クリック閉じ
+  useEffect(() => {
+    if (!lineArtAdjustOpen) return;
+    const handler = (e) => {
+      if (lineArtAdjustRef.current && !lineArtAdjustRef.current.contains(e.target)) {
+        setLineArtAdjustOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [lineArtAdjustOpen]);
 
   // 未保存変更の追跡
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -256,6 +406,17 @@ const StoryboardViewer = ({
     });
   };
 
+  const handleDrawingChange = (pageIdx, cutIdx, value) => {
+    setPages(prev => {
+      const newPages = [...prev];
+      newPages[pageIdx] = {
+        ...newPages[pageIdx],
+        drawingTexts: (newPages[pageIdx].drawingTexts || ['', '', '', '', '']).map((txt, idx) => idx === cutIdx ? value : txt)
+      };
+      return newPages;
+    });
+  };
+
   const handleDialogueChange = (pageIdx, cutIdx, value) => {
     setPages(prev => {
       const newPages = [...prev];
@@ -337,6 +498,7 @@ const StoryboardViewer = ({
       return {
         image: currentImage,
         faceText: page.faceTexts[cutIdx],
+        drawingText: (page.drawingTexts || [])[cutIdx] || '',
         dialogueText: page.dialogueTexts[cutIdx],
         timeValue: page.timeValues[cutIdx],
         blendFile: page.blendFiles[cutIdx],
@@ -585,6 +747,7 @@ const StoryboardViewer = ({
           images: [null],
           imageIndex: 0,
           faceText: '',
+          drawingText: '',
           dialogueText: '',
           timeValue: '',
           blendFile: ''
@@ -594,6 +757,7 @@ const StoryboardViewer = ({
         images: group.map(c => c.images || [c.image || null]),
         imageIndices: group.map(c => c.imageIndex || 0),
         faceTexts: group.map(c => c.faceText),
+        drawingTexts: group.map(c => c.drawingText || ''),
         dialogueTexts: group.map(c => c.dialogueText),
         timeValues: group.map(c => c.timeValue),
         blendFiles: group.map(c => c.blendFile)
@@ -610,6 +774,7 @@ const StoryboardViewer = ({
       page.images = [...page.images];
       page.imageIndices = [...page.imageIndices];
       page.faceTexts = [...page.faceTexts];
+      page.drawingTexts = [...(page.drawingTexts || ['', '', '', '', ''])];
       page.dialogueTexts = [...page.dialogueTexts];
       page.timeValues = [...page.timeValues];
       page.blendFiles = [...page.blendFiles];
@@ -617,6 +782,7 @@ const StoryboardViewer = ({
       page.images.splice(insertIdx, 0, [null]);
       page.imageIndices.splice(insertIdx, 0, 0);
       page.faceTexts.splice(insertIdx, 0, '');
+      page.drawingTexts.splice(insertIdx, 0, '');
       page.dialogueTexts.splice(insertIdx, 0, '');
       page.timeValues.splice(insertIdx, 0, '');
       page.blendFiles.splice(insertIdx, 0, '');
@@ -639,12 +805,13 @@ const StoryboardViewer = ({
 
       while (filledIndexes.length > 5) {
         const overflowIndexes = filledIndexes.slice(5);
-        const overflow = { images: [], imageIndices: [], faceTexts: [], dialogueTexts: [], timeValues: [], blendFiles: [] };
+        const overflow = { images: [], imageIndices: [], faceTexts: [], drawingTexts: [], dialogueTexts: [], timeValues: [], blendFiles: [] };
         for (let i = overflowIndexes.length - 1; i >= 0; i--) {
           const idx = overflowIndexes[i];
           overflow.images.unshift(page.images.splice(idx, 1)[0]);
           overflow.imageIndices.unshift(page.imageIndices.splice(idx, 1)[0]);
           overflow.faceTexts.unshift(page.faceTexts.splice(idx, 1)[0]);
+          overflow.drawingTexts.unshift(page.drawingTexts.splice(idx, 1)[0]);
           overflow.dialogueTexts.unshift(page.dialogueTexts.splice(idx, 1)[0]);
           overflow.timeValues.unshift(page.timeValues.splice(idx, 1)[0]);
           overflow.blendFiles.unshift(page.blendFiles.splice(idx, 1)[0]);
@@ -654,6 +821,7 @@ const StoryboardViewer = ({
           nextPage.images = [...overflow.images, ...nextPage.images];
           nextPage.imageIndices = [...overflow.imageIndices, ...nextPage.imageIndices];
           nextPage.faceTexts = [...overflow.faceTexts, ...nextPage.faceTexts];
+          nextPage.drawingTexts = [...overflow.drawingTexts, ...(nextPage.drawingTexts || ['', '', '', '', ''])];
           nextPage.dialogueTexts = [...overflow.dialogueTexts, ...nextPage.dialogueTexts];
           nextPage.timeValues = [...overflow.timeValues, ...nextPage.timeValues];
           nextPage.blendFiles = [...overflow.blendFiles, ...nextPage.blendFiles];
@@ -669,6 +837,7 @@ const StoryboardViewer = ({
             images: [[null], [null], [null], [null], [null]],
             imageIndices: [0, 0, 0, 0, 0],
             faceTexts: ['', '', '', '', ''],
+            drawingTexts: ['', '', '', '', ''],
             dialogueTexts: ['', '', '', '', ''],
             timeValues: ['', '', '', '', ''],
             blendFiles: ['', '', '', '', '']
@@ -678,6 +847,7 @@ const StoryboardViewer = ({
             newPage.images[i] = overflow.images[i];
             newPage.imageIndices[i] = overflow.imageIndices[i];
             newPage.faceTexts[i] = overflow.faceTexts[i];
+            newPage.drawingTexts[i] = overflow.drawingTexts[i];
             newPage.dialogueTexts[i] = overflow.dialogueTexts[i];
             newPage.timeValues[i] = overflow.timeValues[i];
             newPage.blendFiles[i] = overflow.blendFiles[i];
@@ -723,6 +893,7 @@ const StoryboardViewer = ({
           images: imgs,
           imageIndex: page.imageIndices[cIdx],
           faceText: page.faceTexts[cIdx],
+          drawingText: (page.drawingTexts || [])[cIdx] || '',
           dialogueText: page.dialogueTexts[cIdx],
           timeValue: page.timeValues[cIdx],
           blendFile: page.blendFiles[cIdx]
@@ -757,6 +928,7 @@ const StoryboardViewer = ({
           images: imgs,
           imageIndex: page.imageIndices[cIdx],
           faceText: page.faceTexts[cIdx],
+          drawingText: (page.drawingTexts || [])[cIdx] || '',
           dialogueText: page.dialogueTexts[cIdx],
           timeValue: page.timeValues[cIdx],
           blendFile: page.blendFiles[cIdx]
@@ -1280,13 +1452,33 @@ const StoryboardViewer = ({
                         <div style={{ fontSize: '24px' }}>⏳</div>
                         <div style={{ fontSize: '13px', fontWeight: 600 }}>アップロード中...</div>
                       </div>
-                    ) : currentImage ? (
-                      <img
-                        src={currentImage}
-                        alt={`Cut ${globalIdx + 1}`}
-                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                      />
-                    ) : (
+                    ) : currentImage ? (() => {
+                        const laCacheKey = `${currentImage}__${lineArtThreshold}`;
+                        const laCacheVal = lineArtCache[laCacheKey];
+                        const isCssFallback = laCacheVal === 'css-fallback';
+                        const laSrc = isLineArt && laCacheVal && laCacheVal !== 'loading' && !isCssFallback
+                          ? laCacheVal : currentImage;
+                        const laProcessing = isLineArt && (!laCacheVal || laCacheVal === 'loading');
+                        const laFilter = isLineArt && isCssFallback
+                          ? `grayscale(1) invert(1) contrast(${lineArtThreshold / 10}) brightness(1.1)`
+                          : (!isLineArt && isGrayscale) ? `grayscale(1) contrast(${gsContrast}) brightness(${gsBrightness})` : 'none';
+                        return (
+                          <>
+                            <img
+                              src={laSrc}
+                              alt={`Cut ${globalIdx + 1}`}
+                              style={{ width: '100%', height: '100%', objectFit: 'cover', filter: laFilter }}
+                            />
+                            {isGrayOverlay && !isLineArt && (
+                              <div style={{ position: 'absolute', inset: 0, background: `rgba(${overlayShade},${overlayShade},${overlayShade},${overlayOpacity})`, pointerEvents: 'none' }} />
+                            )}
+                            {laProcessing && (
+                              <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.6)', fontSize: '11px', color: '#6b7280', pointerEvents: 'none' }}>処理中...</div>
+                            )}
+                          </>
+                        );
+                      })()
+                    : (
                       <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '6px', color: '#94a3b8' }}>
                         <svg width="36" height="36" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
@@ -1333,10 +1525,36 @@ const StoryboardViewer = ({
 
                 {/* テキストエリア */}
                 <div style={{ padding: '10px 12px' }}>
+                  {/* 内容/作画 タブ */}
+                  <div style={{ display: 'flex', gap: '4px', marginBottom: '6px' }}>
+                    <button
+                      type="button"
+                      onClick={() => setContentMode('content')}
+                      style={{
+                        padding: '3px 12px', fontSize: '12px', border: 'none', borderRadius: '4px', cursor: 'pointer',
+                        background: contentMode === 'content' ? '#3730a3' : '#e0e7ff',
+                        color: contentMode === 'content' ? 'white' : '#3730a3',
+                        fontWeight: contentMode === 'content' ? 700 : 400
+                      }}
+                    >内容</button>
+                    <button
+                      type="button"
+                      onClick={() => setContentMode('drawing')}
+                      style={{
+                        padding: '3px 12px', fontSize: '12px', border: 'none', borderRadius: '4px', cursor: 'pointer',
+                        background: contentMode === 'drawing' ? '#3730a3' : '#e0e7ff',
+                        color: contentMode === 'drawing' ? 'white' : '#3730a3',
+                        fontWeight: contentMode === 'drawing' ? 700 : 400
+                      }}
+                    >作画</button>
+                  </div>
                   <textarea
-                    value={page.faceTexts[cutIdx]}
-                    onChange={(e) => handleTextChange(pageIdx, cutIdx, e.target.value)}
-                    placeholder="内容..."
+                    value={contentMode === 'drawing' ? ((page.drawingTexts || [])[cutIdx] || '') : page.faceTexts[cutIdx]}
+                    onChange={(e) => contentMode === 'drawing'
+                      ? handleDrawingChange(pageIdx, cutIdx, e.target.value)
+                      : handleTextChange(pageIdx, cutIdx, e.target.value)
+                    }
+                    placeholder={contentMode === 'drawing' ? '作画...' : '内容...'}
                     rows={2}
                     style={{
                       width: '100%', boxSizing: 'border-box',
@@ -1693,6 +1911,215 @@ const StoryboardViewer = ({
               <div style={styles.headerUnderlineRight}></div>
             </div>
           </div>
+          {!isExportingPDF && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '8px' }}>
+              <button
+                type="button"
+                onClick={() => setIsGrayscale(v => !v)}
+                style={{
+                  padding: '3px 12px', fontSize: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '4px', cursor: 'pointer',
+                  background: isGrayscale ? '#374151' : '#f9fafb',
+                  color: isGrayscale ? 'white' : '#374151',
+                  fontWeight: isGrayscale ? 700 : 400,
+                  display: 'flex', alignItems: 'center', gap: '4px'
+                }}
+              >
+                <span style={{ fontSize: '14px' }}>◑</span>
+                グレースケール {isGrayscale ? 'ON' : 'OFF'}
+              </button>
+              {/* グレースケール調整ボタン */}
+              <div style={{ position: 'relative' }} ref={gsAdjustRef}>
+                <button
+                  type="button"
+                  onClick={() => setGsAdjustOpen(v => !v)}
+                  title="グレースケール調整"
+                  style={{
+                    width: '24px', height: '24px', padding: 0,
+                    border: '1px solid #d1d5db', borderRadius: '4px', cursor: 'pointer',
+                    background: gsAdjustOpen ? '#e5e7eb' : '#f9fafb',
+                    color: '#374151', fontSize: '14px',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center'
+                  }}
+                >⚙</button>
+                {gsAdjustOpen && (
+                  <div style={{
+                    position: 'absolute', top: '28px', left: 0, zIndex: 200,
+                    background: 'white', border: '1px solid #d1d5db', borderRadius: '8px',
+                    boxShadow: '0 4px 16px rgba(0,0,0,0.12)', padding: '12px 16px',
+                    minWidth: '200px'
+                  }}>
+                    <div style={{ fontSize: '11px', fontWeight: 700, color: '#6b7280', marginBottom: '10px', letterSpacing: '0.05em' }}>グレースケール調整</div>
+                    <div style={{ marginBottom: '10px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#374151', marginBottom: '4px' }}>
+                        <span>コントラスト</span>
+                        <span style={{ fontWeight: 700 }}>{gsContrast.toFixed(1)}</span>
+                      </div>
+                      <input
+                        type="range" min="0.5" max="3.0" step="0.1"
+                        value={gsContrast}
+                        onChange={e => setGsContrast(parseFloat(e.target.value))}
+                        style={{ width: '100%', accentColor: '#374151' }}
+                      />
+                    </div>
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#374151', marginBottom: '4px' }}>
+                        <span>明るさ</span>
+                        <span style={{ fontWeight: 700 }}>{gsBrightness.toFixed(2)}</span>
+                      </div>
+                      <input
+                        type="range" min="0.5" max="2.0" step="0.05"
+                        value={gsBrightness}
+                        onChange={e => setGsBrightness(parseFloat(e.target.value))}
+                        style={{ width: '100%', accentColor: '#374151' }}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => { setGsContrast(1.6); setGsBrightness(1.15); }}
+                      style={{ marginTop: '10px', width: '100%', fontSize: '11px', padding: '3px 0', border: '1px solid #d1d5db', borderRadius: '4px', background: '#f3f4f6', cursor: 'pointer', color: '#6b7280' }}
+                    >リセット</button>
+                  </div>
+                )}
+              </div>
+              {/* グレーオーバーレイ */}
+              <button
+                type="button"
+                onClick={() => setIsGrayOverlay(v => !v)}
+                style={{
+                  padding: '3px 12px', fontSize: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '4px', cursor: 'pointer',
+                  background: isGrayOverlay ? '#6b7280' : '#f9fafb',
+                  color: isGrayOverlay ? 'white' : '#374151',
+                  fontWeight: isGrayOverlay ? 700 : 400,
+                  display: 'flex', alignItems: 'center', gap: '4px'
+                }}
+              >
+                <span style={{ fontSize: '13px' }}>▣</span>
+                グレー幕 {isGrayOverlay ? 'ON' : 'OFF'}
+              </button>
+              <div style={{ position: 'relative' }} ref={overlayAdjustRef}>
+                <button
+                  type="button"
+                  onClick={() => setOverlayAdjustOpen(v => !v)}
+                  title="グレーオーバーレイ調整"
+                  style={{
+                    width: '24px', height: '24px', padding: 0,
+                    border: '1px solid #d1d5db', borderRadius: '4px', cursor: 'pointer',
+                    background: overlayAdjustOpen ? '#e5e7eb' : '#f9fafb',
+                    color: '#374151', fontSize: '14px',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center'
+                  }}
+                >⚙</button>
+                {overlayAdjustOpen && (
+                  <div style={{
+                    position: 'absolute', top: '28px', left: 0, zIndex: 200,
+                    background: 'white', border: '1px solid #d1d5db', borderRadius: '8px',
+                    boxShadow: '0 4px 16px rgba(0,0,0,0.12)', padding: '12px 16px',
+                    minWidth: '200px'
+                  }}>
+                    <div style={{ fontSize: '11px', fontWeight: 700, color: '#6b7280', marginBottom: '10px', letterSpacing: '0.05em' }}>グレー幕調整</div>
+                    <div style={{ marginBottom: '10px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#374151', marginBottom: '4px' }}>
+                        <span>透明度</span>
+                        <span style={{ fontWeight: 700 }}>{Math.round(overlayOpacity * 100)}%</span>
+                      </div>
+                      <input
+                        type="range" min="0.05" max="1.0" step="0.05"
+                        value={overlayOpacity}
+                        onChange={e => setOverlayOpacity(parseFloat(e.target.value))}
+                        style={{ width: '100%', accentColor: '#6b7280' }}
+                      />
+                    </div>
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#374151', marginBottom: '4px' }}>
+                        <span>グレーの明るさ</span>
+                        <span style={{ fontWeight: 700 }}>{overlayShade < 86 ? '暗め' : overlayShade < 170 ? '中間' : '明るめ'}</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ fontSize: '10px', color: '#9ca3af' }}>黒</span>
+                        <input
+                          type="range" min="0" max="255" step="5"
+                          value={overlayShade}
+                          onChange={e => setOverlayShade(parseInt(e.target.value))}
+                          style={{ flex: 1, accentColor: '#6b7280' }}
+                        />
+                        <span style={{ fontSize: '10px', color: '#9ca3af' }}>白</span>
+                      </div>
+                      <div style={{ marginTop: '6px', height: '14px', borderRadius: '3px', border: '1px solid #e5e7eb', background: `rgba(${overlayShade},${overlayShade},${overlayShade},${overlayOpacity})` }} />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => { setOverlayOpacity(0.4); setOverlayShade(128); }}
+                      style={{ marginTop: '10px', width: '100%', fontSize: '11px', padding: '3px 0', border: '1px solid #d1d5db', borderRadius: '4px', background: '#f3f4f6', cursor: 'pointer', color: '#6b7280' }}
+                    >リセット</button>
+                  </div>
+                )}
+              </div>
+              {/* 線画化 */}
+              <button
+                type="button"
+                onClick={() => setIsLineArt(v => !v)}
+                style={{
+                  padding: '3px 12px', fontSize: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '4px', cursor: 'pointer',
+                  background: isLineArt ? '#1e293b' : '#f9fafb',
+                  color: isLineArt ? 'white' : '#374151',
+                  fontWeight: isLineArt ? 700 : 400,
+                  display: 'flex', alignItems: 'center', gap: '4px'
+                }}
+              >
+                <span style={{ fontSize: '13px' }}>✏</span>
+                線画化 {isLineArt ? 'ON' : 'OFF'}
+              </button>
+              <div style={{ position: 'relative' }} ref={lineArtAdjustRef}>
+                <button
+                  type="button"
+                  onClick={() => setLineArtAdjustOpen(v => !v)}
+                  title="線画化調整"
+                  style={{
+                    width: '24px', height: '24px', padding: 0,
+                    border: '1px solid #d1d5db', borderRadius: '4px', cursor: 'pointer',
+                    background: lineArtAdjustOpen ? '#e5e7eb' : '#f9fafb',
+                    color: '#374151', fontSize: '14px',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center'
+                  }}
+                >⚙</button>
+                {lineArtAdjustOpen && (
+                  <div style={{
+                    position: 'absolute', top: '28px', left: 0, zIndex: 200,
+                    background: 'white', border: '1px solid #d1d5db', borderRadius: '8px',
+                    boxShadow: '0 4px 16px rgba(0,0,0,0.12)', padding: '12px 16px',
+                    minWidth: '220px'
+                  }}>
+                    <div style={{ fontSize: '11px', fontWeight: 700, color: '#6b7280', marginBottom: '4px', letterSpacing: '0.05em' }}>線画化調整</div>
+                    <div style={{ fontSize: '11px', color: '#9ca3af', marginBottom: '4px' }}>閾値が低いほど線が多く出ます</div>
+                    <div style={{ fontSize: '10px', color: '#d1d5db', marginBottom: '10px' }}>※ CORS未設定の場合はCSSフィルター代替</div>
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#374151', marginBottom: '4px' }}>
+                        <span>エッジ感度（閾値）</span>
+                        <span style={{ fontWeight: 700 }}>{lineArtThreshold}</span>
+                      </div>
+                      <input
+                        type="range" min="5" max="100" step="1"
+                        value={lineArtThreshold}
+                        onChange={e => setLineArtThreshold(parseInt(e.target.value))}
+                        style={{ width: '100%', accentColor: '#1e293b' }}
+                      />
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#9ca3af' }}>
+                        <span>線が多い</span><span>線が少ない</span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setLineArtThreshold(30)}
+                      style={{ marginTop: '10px', width: '100%', fontSize: '11px', padding: '3px 0', border: '1px solid #d1d5db', borderRadius: '4px', background: '#f3f4f6', cursor: 'pointer', color: '#6b7280' }}
+                    >リセット</button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* ページごとに描画 */}
@@ -1742,6 +2169,7 @@ const StoryboardViewer = ({
                                   images: imgs,
                                   imageIndex: page.imageIndices[cIdx],
                                   faceText: page.faceTexts[cIdx],
+                                  drawingText: (page.drawingTexts || [])[cIdx] || '',
                                   dialogueText: page.dialogueTexts[cIdx],
                                   timeValue: page.timeValues[cIdx],
                                   blendFile: page.blendFiles[cIdx]
@@ -1762,9 +2190,28 @@ const StoryboardViewer = ({
                             const currentImage = cutImages[currentIdx];
                             return (
                               <>
-                                {currentImage ? (
-                                  <img src={currentImage} alt={`Frame ${pageIdx * 5 + cutIdx + 1}`} style={styles.frameImage} />
-                                ) : (
+                                {currentImage ? (() => {
+                                  const laCacheKey = `${currentImage}__${lineArtThreshold}`;
+                                  const laCacheVal = lineArtCache[laCacheKey];
+                                  const isCssFallback = laCacheVal === 'css-fallback';
+                                  const laSrc = isLineArt && laCacheVal && laCacheVal !== 'loading' && !isCssFallback
+                                    ? laCacheVal : currentImage;
+                                  const laProcessing = isLineArt && (!laCacheVal || laCacheVal === 'loading');
+                                  const laFilter = isLineArt && isCssFallback
+                                    ? `grayscale(1) invert(1) contrast(${lineArtThreshold / 10}) brightness(1.1)`
+                                    : (!isLineArt && isGrayscale) ? `grayscale(1) contrast(${gsContrast}) brightness(${gsBrightness})` : 'none';
+                                  return (
+                                    <>
+                                      <img src={laSrc} alt={`Frame ${pageIdx * 5 + cutIdx + 1}`} style={{ ...styles.frameImage, filter: laFilter }} />
+                                      {isGrayOverlay && !isLineArt && (
+                                        <div style={{ position: 'absolute', inset: 0, background: `rgba(${overlayShade},${overlayShade},${overlayShade},${overlayOpacity})`, pointerEvents: 'none' }} />
+                                      )}
+                                      {laProcessing && (
+                                        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.6)', fontSize: '10px', color: '#6b7280', pointerEvents: 'none' }}>処理中...</div>
+                                      )}
+                                    </>
+                                  );
+                                })() : (
                                   <div style={styles.framePlaceholder}>
                                     <div style={styles.placeholderContent}>
                                       <svg style={styles.plusIcon} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1893,19 +2340,53 @@ const StoryboardViewer = ({
 
                 {/* 内容列 */}
                 <div style={styles.faceColumn}>
-                  <div style={{ ...styles.columnHeader, ...styles.faceHeader }}>内容</div>
+                  <div style={{ ...styles.columnHeader, ...styles.faceHeader, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 6px' }}>
+                    {isExportingPDF ? (
+                      <span>{contentMode === 'drawing' ? '作画' : '内容'}</span>
+                    ) : (
+                      <div style={{ display: 'flex', gap: '2px' }}>
+                        <button
+                          type="button"
+                          onClick={() => setContentMode('content')}
+                          style={{
+                            padding: '2px 8px', fontSize: '11px', border: 'none', borderRadius: '3px', cursor: 'pointer',
+                            background: contentMode === 'content' ? '#3730a3' : '#e0e7ff',
+                            color: contentMode === 'content' ? 'white' : '#3730a3',
+                            fontWeight: contentMode === 'content' ? 700 : 400
+                          }}
+                        >内容</button>
+                        <button
+                          type="button"
+                          onClick={() => setContentMode('drawing')}
+                          style={{
+                            padding: '2px 8px', fontSize: '11px', border: 'none', borderRadius: '3px', cursor: 'pointer',
+                            background: contentMode === 'drawing' ? '#3730a3' : '#e0e7ff',
+                            color: contentMode === 'drawing' ? 'white' : '#3730a3',
+                            fontWeight: contentMode === 'drawing' ? 700 : 400
+                          }}
+                        >作画</button>
+                      </div>
+                    )}
+                  </div>
                   <div style={styles.faceContent}>
                     {[0, 1, 2, 3, 4].map((cutIdx) => (
                       <div key={cutIdx} style={styles.faceInputRow}>
                         {isExportingPDF ? (
                           <div style={{ width: '100%', minHeight: '40px', fontSize: '13px', color: '#222', background: 'none', border: 'none', padding: '4px 8px', marginBottom: '6px', whiteSpace: 'pre-line', wordBreak: 'break-word' }}>
-                            {page.faceTexts[cutIdx] || <span style={{ color: '#bbb' }}>内容...</span>}
+                            {contentMode === 'drawing'
+                              ? ((page.drawingTexts || [])[cutIdx] || <span style={{ color: '#bbb' }}>作画...</span>)
+                              : (page.faceTexts[cutIdx] || <span style={{ color: '#bbb' }}>内容...</span>)
+                            }
                           </div>
                         ) : (
                           <textarea style={styles.faceInput}
-                            value={page.faceTexts[cutIdx]}
-                            onChange={(e) => handleTextChange(pageIdx, cutIdx, e.target.value)}
-                            placeholder="内容..." rows={1} />
+                            value={contentMode === 'drawing' ? ((page.drawingTexts || [])[cutIdx] || '') : page.faceTexts[cutIdx]}
+                            onChange={(e) => contentMode === 'drawing'
+                              ? handleDrawingChange(pageIdx, cutIdx, e.target.value)
+                              : handleTextChange(pageIdx, cutIdx, e.target.value)
+                            }
+                            placeholder={contentMode === 'drawing' ? '作画...' : '内容...'}
+                            rows={1} />
                         )}
                         <div style={{ display: 'flex', alignItems: 'center' }}>
                           {isExportingPDF ? (
