@@ -29,7 +29,7 @@ const ds = {
   frameNumber: { position: 'absolute', top: '120px', left: '-60px', fontSize: '20px', color: '#374151', fontWeight: '500' },
   faceColumn: { borderRight: '1px solid #d1d5db', width: '120px', minWidth: '120px', maxWidth: '120px' },
   faceContent: { padding: '9px 12px' },
-  faceInputRow: { marginBottom: '2px', height: '165px', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'center' },
+  faceInputRow: { marginBottom: '2px', height: '165px', maxHeight: '165px', minHeight: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'center', overflow: 'hidden', boxSizing: 'border-box' },
   faceText: { width: '100%', minHeight: '40px', border: '1px solid #e5e7eb', borderRadius: '4px', padding: '4px 8px', fontSize: '12px', background: '#f9fafb', color: '#111', wordBreak: 'break-all', whiteSpace: 'pre-wrap', boxSizing: 'border-box' },
   contentColumn: { flex: 1, borderRight: '1px solid #d1d5db' },
   timeColumn: { width: '60px' },
@@ -107,8 +107,8 @@ const DesktopReadOnlyPage = ({ page, globalPageIdx, storyboardId, onOpen, curren
           <div style={ds.columnHeader}>台詞</div>
           <div style={ds.faceContent}>
             {page.dialogueTexts?.map((text, cutIdx) => (
-              <div key={cutIdx} style={ds.faceInputRow}>
-                <div style={ds.faceText}>{text || ''}</div>
+              <div key={cutIdx} style={{ ...ds.faceInputRow, height: '165px', maxHeight: '165px', overflowY: 'auto', overflowX: 'hidden', alignItems: 'stretch', justifyContent: 'flex-start', paddingTop: '8px', paddingBottom: '8px', boxSizing: 'border-box' }}>
+                <div style={{ ...ds.faceText, minHeight: 'unset' }}>{text || ''}</div>
               </div>
             ))}
           </div>
@@ -118,13 +118,21 @@ const DesktopReadOnlyPage = ({ page, globalPageIdx, storyboardId, onOpen, curren
           <div style={{ padding: '9px 12px' }}>
             {page.faceTexts?.map((text, cutIdx) => {
               const drawingText = page.drawingTexts?.[cutIdx] || '';
+              const screenText = page.screenTexts?.[cutIdx] || '';
+              const hasExtra = drawingText || screenText;
               return (
-                <div key={cutIdx} style={{ ...ds.faceInputRow, height: 'auto', minHeight: '165px', justifyContent: 'flex-start', paddingTop: '10px', paddingBottom: '10px' }}>
-                  <div style={{ ...ds.faceText, width: '100%' }}>{text || ''}</div>
+                <div key={cutIdx} style={{ ...ds.faceInputRow, height: '165px', maxHeight: '165px', overflowY: 'auto', overflowX: 'hidden', justifyContent: 'flex-start', paddingTop: '8px', paddingBottom: '8px', alignItems: 'stretch', boxSizing: 'border-box' }}>
+                  <div style={{ ...ds.faceText, width: '100%', minHeight: 'unset', fontSize: hasExtra ? '11px' : '12px' }}>{text || ''}</div>
                   {drawingText && (
-                    <div style={{ ...ds.faceText, width: '100%', marginTop: '6px', background: '#f0f4ff', borderColor: '#c7d7f7', fontSize: '11px' }}>
+                    <div style={{ ...ds.faceText, width: '100%', minHeight: 'unset', marginTop: '4px', background: '#f0f4ff', borderColor: '#c7d7f7', fontSize: '11px' }}>
                       <span style={{ color: '#6b7280', fontSize: '10px', display: 'block', marginBottom: '2px' }}>作画</span>
                       {drawingText}
+                    </div>
+                  )}
+                  {screenText && (
+                    <div style={{ ...ds.faceText, width: '100%', minHeight: 'unset', marginTop: '4px', background: '#f0fff4', borderColor: '#a7f3d0', fontSize: '11px' }}>
+                      <span style={{ color: '#6b7280', fontSize: '10px', display: 'block', marginBottom: '2px' }}>画面</span>
+                      {screenText}
                     </div>
                   )}
                 </div>
@@ -158,6 +166,7 @@ const MobileCutCard = ({ page, cutIdx, globalCutNum, storyboardId, onOpen, isCur
   const faceText = page.faceTexts?.[cutIdx] || '';
   const dialogueText = page.dialogueTexts?.[cutIdx] || '';
   const drawingText = page.drawingTexts?.[cutIdx] || '';
+  const screenText = page.screenTexts?.[cutIdx] || '';
   const timeValue = page.timeValues?.[cutIdx] || '';
 
   return (
@@ -219,6 +228,12 @@ const MobileCutCard = ({ page, cutIdx, globalCutNum, storyboardId, onOpen, isCur
           <div style={{ width: '100%', border: '1px solid #c7d7f7', borderRadius: '6px', padding: '6px 10px', fontSize: '12px', background: '#f0f4ff', color: '#111', whiteSpace: 'pre-wrap', wordBreak: 'break-all', marginBottom: '6px' }}>
             <span style={{ color: '#6b7280', fontSize: '10px', display: 'block', marginBottom: '2px' }}>作画</span>
             {drawingText}
+          </div>
+        )}
+        {screenText && (
+          <div style={{ width: '100%', border: '1px solid #a7f3d0', borderRadius: '6px', padding: '6px 10px', fontSize: '12px', background: '#f0fff4', color: '#111', whiteSpace: 'pre-wrap', wordBreak: 'break-all', marginBottom: '6px' }}>
+            <span style={{ color: '#6b7280', fontSize: '10px', display: 'block', marginBottom: '2px' }}>画面</span>
+            {screenText}
           </div>
         )}
         <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-start' }}>
