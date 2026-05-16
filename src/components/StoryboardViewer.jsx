@@ -11,6 +11,7 @@ const EMPTY_PAGE = () => ({
   imageIndices: [0, 0, 0, 0, 0],
   faceTexts: ['', '', '', '', ''],
   drawingTexts: ['', '', '', '', ''],
+  screenTexts: ['', '', '', '', ''],
   dialogueTexts: ['', '', '', '', ''],
   timeValues: ['', '', '', '', ''],
   blendFiles: ['', '', '', '', '']
@@ -417,6 +418,17 @@ const StoryboardViewer = ({
     });
   };
 
+  const handleScreenChange = (pageIdx, cutIdx, value) => {
+    setPages(prev => {
+      const newPages = [...prev];
+      newPages[pageIdx] = {
+        ...newPages[pageIdx],
+        screenTexts: (newPages[pageIdx].screenTexts || ['', '', '', '', '']).map((txt, idx) => idx === cutIdx ? value : txt)
+      };
+      return newPages;
+    });
+  };
+
   const handleDialogueChange = (pageIdx, cutIdx, value) => {
     setPages(prev => {
       const newPages = [...prev];
@@ -499,6 +511,7 @@ const StoryboardViewer = ({
         image: currentImage,
         faceText: page.faceTexts[cutIdx],
         drawingText: (page.drawingTexts || [])[cutIdx] || '',
+        screenText: (page.screenTexts || [])[cutIdx] || '',
         dialogueText: page.dialogueTexts[cutIdx],
         timeValue: page.timeValues[cutIdx],
         blendFile: page.blendFiles[cutIdx],
@@ -748,6 +761,7 @@ const StoryboardViewer = ({
           imageIndex: 0,
           faceText: '',
           drawingText: '',
+          screenText: '',
           dialogueText: '',
           timeValue: '',
           blendFile: ''
@@ -758,6 +772,7 @@ const StoryboardViewer = ({
         imageIndices: group.map(c => c.imageIndex || 0),
         faceTexts: group.map(c => c.faceText),
         drawingTexts: group.map(c => c.drawingText || ''),
+        screenTexts: group.map(c => c.screenText || ''),
         dialogueTexts: group.map(c => c.dialogueText),
         timeValues: group.map(c => c.timeValue),
         blendFiles: group.map(c => c.blendFile)
@@ -775,6 +790,7 @@ const StoryboardViewer = ({
       page.imageIndices = [...page.imageIndices];
       page.faceTexts = [...page.faceTexts];
       page.drawingTexts = [...(page.drawingTexts || ['', '', '', '', ''])];
+      page.screenTexts = [...(page.screenTexts || ['', '', '', '', ''])];
       page.dialogueTexts = [...page.dialogueTexts];
       page.timeValues = [...page.timeValues];
       page.blendFiles = [...page.blendFiles];
@@ -783,6 +799,7 @@ const StoryboardViewer = ({
       page.imageIndices.splice(insertIdx, 0, 0);
       page.faceTexts.splice(insertIdx, 0, '');
       page.drawingTexts.splice(insertIdx, 0, '');
+      page.screenTexts.splice(insertIdx, 0, '');
       page.dialogueTexts.splice(insertIdx, 0, '');
       page.timeValues.splice(insertIdx, 0, '');
       page.blendFiles.splice(insertIdx, 0, '');
@@ -805,13 +822,14 @@ const StoryboardViewer = ({
 
       while (filledIndexes.length > 5) {
         const overflowIndexes = filledIndexes.slice(5);
-        const overflow = { images: [], imageIndices: [], faceTexts: [], drawingTexts: [], dialogueTexts: [], timeValues: [], blendFiles: [] };
+        const overflow = { images: [], imageIndices: [], faceTexts: [], drawingTexts: [], screenTexts: [], dialogueTexts: [], timeValues: [], blendFiles: [] };
         for (let i = overflowIndexes.length - 1; i >= 0; i--) {
           const idx = overflowIndexes[i];
           overflow.images.unshift(page.images.splice(idx, 1)[0]);
           overflow.imageIndices.unshift(page.imageIndices.splice(idx, 1)[0]);
           overflow.faceTexts.unshift(page.faceTexts.splice(idx, 1)[0]);
           overflow.drawingTexts.unshift(page.drawingTexts.splice(idx, 1)[0]);
+          overflow.screenTexts.unshift(page.screenTexts.splice(idx, 1)[0]);
           overflow.dialogueTexts.unshift(page.dialogueTexts.splice(idx, 1)[0]);
           overflow.timeValues.unshift(page.timeValues.splice(idx, 1)[0]);
           overflow.blendFiles.unshift(page.blendFiles.splice(idx, 1)[0]);
@@ -822,6 +840,7 @@ const StoryboardViewer = ({
           nextPage.imageIndices = [...overflow.imageIndices, ...nextPage.imageIndices];
           nextPage.faceTexts = [...overflow.faceTexts, ...nextPage.faceTexts];
           nextPage.drawingTexts = [...overflow.drawingTexts, ...(nextPage.drawingTexts || ['', '', '', '', ''])];
+          nextPage.screenTexts = [...overflow.screenTexts, ...(nextPage.screenTexts || ['', '', '', '', ''])];
           nextPage.dialogueTexts = [...overflow.dialogueTexts, ...nextPage.dialogueTexts];
           nextPage.timeValues = [...overflow.timeValues, ...nextPage.timeValues];
           nextPage.blendFiles = [...overflow.blendFiles, ...nextPage.blendFiles];
@@ -838,6 +857,7 @@ const StoryboardViewer = ({
             imageIndices: [0, 0, 0, 0, 0],
             faceTexts: ['', '', '', '', ''],
             drawingTexts: ['', '', '', '', ''],
+            screenTexts: ['', '', '', '', ''],
             dialogueTexts: ['', '', '', '', ''],
             timeValues: ['', '', '', '', ''],
             blendFiles: ['', '', '', '', '']
@@ -848,6 +868,7 @@ const StoryboardViewer = ({
             newPage.imageIndices[i] = overflow.imageIndices[i];
             newPage.faceTexts[i] = overflow.faceTexts[i];
             newPage.drawingTexts[i] = overflow.drawingTexts[i];
+            newPage.screenTexts[i] = overflow.screenTexts[i];
             newPage.dialogueTexts[i] = overflow.dialogueTexts[i];
             newPage.timeValues[i] = overflow.timeValues[i];
             newPage.blendFiles[i] = overflow.blendFiles[i];
@@ -894,6 +915,7 @@ const StoryboardViewer = ({
           imageIndex: page.imageIndices[cIdx],
           faceText: page.faceTexts[cIdx],
           drawingText: (page.drawingTexts || [])[cIdx] || '',
+          screenText: (page.screenTexts || [])[cIdx] || '',
           dialogueText: page.dialogueTexts[cIdx],
           timeValue: page.timeValues[cIdx],
           blendFile: page.blendFiles[cIdx]
@@ -929,6 +951,7 @@ const StoryboardViewer = ({
           imageIndex: page.imageIndices[cIdx],
           faceText: page.faceTexts[cIdx],
           drawingText: (page.drawingTexts || [])[cIdx] || '',
+          screenText: (page.screenTexts || [])[cIdx] || '',
           dialogueText: page.dialogueTexts[cIdx],
           timeValue: page.timeValues[cIdx],
           blendFile: page.blendFiles[cIdx]
@@ -1525,7 +1548,7 @@ const StoryboardViewer = ({
 
                 {/* テキストエリア */}
                 <div style={{ padding: '10px 12px' }}>
-                  {/* 内容/作画 タブ */}
+                  {/* 内容/作画/画面 タブ */}
                   <div style={{ display: 'flex', gap: '4px', marginBottom: '6px' }}>
                     <button
                       type="button"
@@ -1547,14 +1570,29 @@ const StoryboardViewer = ({
                         fontWeight: contentMode === 'drawing' ? 700 : 400
                       }}
                     >作画</button>
+                    <button
+                      type="button"
+                      onClick={() => setContentMode('screen')}
+                      style={{
+                        padding: '3px 12px', fontSize: '12px', border: 'none', borderRadius: '4px', cursor: 'pointer',
+                        background: contentMode === 'screen' ? '#3730a3' : '#e0e7ff',
+                        color: contentMode === 'screen' ? 'white' : '#3730a3',
+                        fontWeight: contentMode === 'screen' ? 700 : 400
+                      }}
+                    >画面</button>
                   </div>
                   <textarea
-                    value={contentMode === 'drawing' ? ((page.drawingTexts || [])[cutIdx] || '') : page.faceTexts[cutIdx]}
-                    onChange={(e) => contentMode === 'drawing'
-                      ? handleDrawingChange(pageIdx, cutIdx, e.target.value)
+                    value={
+                      contentMode === 'drawing' ? ((page.drawingTexts || [])[cutIdx] || '')
+                      : contentMode === 'screen' ? ((page.screenTexts || [])[cutIdx] || '')
+                      : page.faceTexts[cutIdx]
+                    }
+                    onChange={(e) =>
+                      contentMode === 'drawing' ? handleDrawingChange(pageIdx, cutIdx, e.target.value)
+                      : contentMode === 'screen' ? handleScreenChange(pageIdx, cutIdx, e.target.value)
                       : handleTextChange(pageIdx, cutIdx, e.target.value)
                     }
-                    placeholder={contentMode === 'drawing' ? '作画...' : '内容...'}
+                    placeholder={contentMode === 'drawing' ? '作画...' : contentMode === 'screen' ? '画面作成タスク...' : '内容...'}
                     rows={2}
                     style={{
                       width: '100%', boxSizing: 'border-box',
@@ -2170,6 +2208,7 @@ const StoryboardViewer = ({
                                   imageIndex: page.imageIndices[cIdx],
                                   faceText: page.faceTexts[cIdx],
                                   drawingText: (page.drawingTexts || [])[cIdx] || '',
+                                  screenText: (page.screenTexts || [])[cIdx] || '',
                                   dialogueText: page.dialogueTexts[cIdx],
                                   timeValue: page.timeValues[cIdx],
                                   blendFile: page.blendFiles[cIdx]
@@ -2342,7 +2381,7 @@ const StoryboardViewer = ({
                 <div style={styles.faceColumn}>
                   <div style={{ ...styles.columnHeader, ...styles.faceHeader, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 6px' }}>
                     {isExportingPDF ? (
-                      <span>{contentMode === 'drawing' ? '作画' : '内容'}</span>
+                      <span>{contentMode === 'drawing' ? '作画' : contentMode === 'screen' ? '画面' : '内容'}</span>
                     ) : (
                       <div style={{ display: 'flex', gap: '2px' }}>
                         <button
@@ -2365,6 +2404,16 @@ const StoryboardViewer = ({
                             fontWeight: contentMode === 'drawing' ? 700 : 400
                           }}
                         >作画</button>
+                        <button
+                          type="button"
+                          onClick={() => setContentMode('screen')}
+                          style={{
+                            padding: '2px 8px', fontSize: '11px', border: 'none', borderRadius: '3px', cursor: 'pointer',
+                            background: contentMode === 'screen' ? '#3730a3' : '#e0e7ff',
+                            color: contentMode === 'screen' ? 'white' : '#3730a3',
+                            fontWeight: contentMode === 'screen' ? 700 : 400
+                          }}
+                        >画面</button>
                       </div>
                     )}
                   </div>
@@ -2375,17 +2424,24 @@ const StoryboardViewer = ({
                           <div style={{ width: '100%', minHeight: '40px', fontSize: '13px', color: '#222', background: 'none', border: 'none', padding: '4px 8px', marginBottom: '6px', whiteSpace: 'pre-line', wordBreak: 'break-word' }}>
                             {contentMode === 'drawing'
                               ? ((page.drawingTexts || [])[cutIdx] || <span style={{ color: '#bbb' }}>作画...</span>)
+                              : contentMode === 'screen'
+                              ? ((page.screenTexts || [])[cutIdx] || <span style={{ color: '#bbb' }}>画面作成タスク...</span>)
                               : (page.faceTexts[cutIdx] || <span style={{ color: '#bbb' }}>内容...</span>)
                             }
                           </div>
                         ) : (
                           <textarea style={styles.faceInput}
-                            value={contentMode === 'drawing' ? ((page.drawingTexts || [])[cutIdx] || '') : page.faceTexts[cutIdx]}
-                            onChange={(e) => contentMode === 'drawing'
-                              ? handleDrawingChange(pageIdx, cutIdx, e.target.value)
+                            value={
+                              contentMode === 'drawing' ? ((page.drawingTexts || [])[cutIdx] || '')
+                              : contentMode === 'screen' ? ((page.screenTexts || [])[cutIdx] || '')
+                              : page.faceTexts[cutIdx]
+                            }
+                            onChange={(e) =>
+                              contentMode === 'drawing' ? handleDrawingChange(pageIdx, cutIdx, e.target.value)
+                              : contentMode === 'screen' ? handleScreenChange(pageIdx, cutIdx, e.target.value)
                               : handleTextChange(pageIdx, cutIdx, e.target.value)
                             }
-                            placeholder={contentMode === 'drawing' ? '作画...' : '内容...'}
+                            placeholder={contentMode === 'drawing' ? '作画...' : contentMode === 'screen' ? '画面作成タスク...' : '内容...'}
                             rows={1} />
                         )}
                         <div style={{ display: 'flex', alignItems: 'center' }}>
