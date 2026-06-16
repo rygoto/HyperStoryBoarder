@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { ref as storageRef, getBytes } from 'firebase/storage';
@@ -86,13 +86,30 @@ const restoreImages = (originals) => {
   }
 };
 
+const sanitizePdfFileName = (name) => {
+  const trimmed = (name || '').trim();
+  if (!trimmed) return 'storyboard';
+  return trimmed.replace(/[\\/:*?"<>|]/g, '_');
+};
+
+const buildPdfFileName = (baseName, pageIndex, totalPages) => {
+  const safeName = sanitizePdfFileName(baseName);
+  if (totalPages <= 1) return `${safeName}.pdf`;
+  return `${safeName}_page${pageIndex + 1}.pdf`;
+};
+
 const ExportPDFButton = ({ pageRefs, pages, setIsExportingPDF }) => {
+  const [pdfExportName, setPdfExportName] = useState('');
+  const [isExporting, setIsExporting] = useState(false);
+
   const handleExport = async () => {
     if (!pageRefs || !pageRefs.current || pageRefs.current.length === 0) return;
     if (!setIsExportingPDF) return;
+    setIsExporting(true);
     setIsExportingPDF(true);
     // 画面更新を待つ
     await new Promise(resolve => setTimeout(resolve, 100));
+    try {
     for (let i = 0; i < pages.length; i++) {
       const element = pageRefs.current[i];
       if (!element) continue;
@@ -185,28 +202,52 @@ const ExportPDFButton = ({ pageRefs, pages, setIsExportingPDF }) => {
           pageNumber++;
         }
       }
-      pdf.save(`storyboard_page${i + 1}.pdf`);
+      pdf.save(buildPdfFileName(pdfExportName, i, pages.length));
     }
-    setIsExportingPDF(false);
+    } finally {
+      setIsExporting(false);
+      setIsExportingPDF(false);
+    }
   };
 
   return (
-    <button
-      onClick={handleExport}
-      style={{
-        margin: '16px',
-        padding: '8px 24px',
-        fontSize: '16px',
-        background: '#2563eb',
-        color: 'white',
-        border: 'none',
-        borderRadius: '4px',
-        cursor: 'pointer',
-        fontFamily: 'inherit'
-      }}
-    >
-      各ページごとにPDF保存
-    </button>
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '16px' }}>
+      <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', color: '#374151' }}>
+        <span style={{ whiteSpace: 'nowrap' }}>PDF名</span>
+        <input
+          type="text"
+          value={pdfExportName}
+          onChange={(e) => setPdfExportName(e.target.value)}
+          placeholder="storyboard"
+          disabled={isExporting}
+          style={{
+            width: '160px',
+            padding: '6px 10px',
+            fontSize: '14px',
+            border: '1px solid #d1d5db',
+            borderRadius: '4px',
+            fontFamily: 'inherit',
+            background: isExporting ? '#f3f4f6' : 'white'
+          }}
+        />
+      </label>
+      <button
+        onClick={handleExport}
+        disabled={isExporting}
+        style={{
+          padding: '8px 24px',
+          fontSize: '16px',
+          background: isExporting ? '#93c5fd' : '#2563eb',
+          color: 'white',
+          border: 'none',
+          borderRadius: '4px',
+          cursor: isExporting ? 'wait' : 'pointer',
+          fontFamily: 'inherit'
+        }}
+      >
+        {isExporting ? 'PDF出力中...' : '各ページごとにPDF保存'}
+      </button>
+    </div>
   );
 };
 

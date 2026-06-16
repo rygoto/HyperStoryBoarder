@@ -17,6 +17,44 @@ const EMPTY_PAGE = () => ({
   blendFiles: ['', '', '', '', '']
 });
 
+const EMPTY_CUT = () => ({
+  images: [null],
+  imageIndex: 0,
+  faceText: '',
+  drawingText: '',
+  screenText: '',
+  dialogueText: '',
+  timeValue: '',
+  blendFile: ''
+});
+
+const isCutFilled = (cut) => {
+  const hasImage = cut.images && cut.images.some(img => img !== null);
+  return (
+    hasImage ||
+    cut.faceText !== '' ||
+    (cut.drawingText || '') !== '' ||
+    (cut.screenText || '') !== '' ||
+    cut.dialogueText !== '' ||
+    cut.timeValue !== '' ||
+    cut.blendFile !== ''
+  );
+};
+
+const flattenPagesToCuts = (pages) =>
+  pages.flatMap((page) =>
+    page.images.map((imgs, cIdx) => ({
+      images: imgs,
+      imageIndex: page.imageIndices[cIdx],
+      faceText: page.faceTexts[cIdx],
+      drawingText: (page.drawingTexts || [])[cIdx] || '',
+      screenText: (page.screenTexts || [])[cIdx] || '',
+      dialogueText: page.dialogueTexts[cIdx],
+      timeValue: page.timeValues[cIdx],
+      blendFile: page.blendFiles[cIdx]
+    }))
+  );
+
 const StoryboardViewer = ({ 
   storyboardId, 
   initialPages = [EMPTY_PAGE()], 
@@ -781,104 +819,22 @@ const StoryboardViewer = ({
     return pages;
   }
 
-  // カット挿入
-  const handleAddCutAt = (pageIdx, insertIdx) => {
+  // カット挿入（以降のカットを繰り下げ、1ページ5カットを維持）
+  const handleAddCutAt = (pageIdx, cutIdx) => {
     setPages(prev => {
-      let newPages = [...prev];
-      let page = { ...newPages[pageIdx] };
-      page.images = [...page.images];
-      page.imageIndices = [...page.imageIndices];
-      page.faceTexts = [...page.faceTexts];
-      page.drawingTexts = [...(page.drawingTexts || ['', '', '', '', ''])];
-      page.screenTexts = [...(page.screenTexts || ['', '', '', '', ''])];
-      page.dialogueTexts = [...page.dialogueTexts];
-      page.timeValues = [...page.timeValues];
-      page.blendFiles = [...page.blendFiles];
+      const flat = flattenPagesToCuts(prev);
+      const lastHadContent = flat.length > 0 && isCutFilled(flat[flat.length - 1]);
+      const maxWithoutNewPage = Math.ceil(flat.length / 5) * 5;
 
-      page.images.splice(insertIdx, 0, [null]);
-      page.imageIndices.splice(insertIdx, 0, 0);
-      page.faceTexts.splice(insertIdx, 0, '');
-      page.drawingTexts.splice(insertIdx, 0, '');
-      page.screenTexts.splice(insertIdx, 0, '');
-      page.dialogueTexts.splice(insertIdx, 0, '');
-      page.timeValues.splice(insertIdx, 0, '');
-      page.blendFiles.splice(insertIdx, 0, '');
+      const insertIdx = pageIdx * 5 + cutIdx + 1;
+      flat.splice(insertIdx, 0, EMPTY_CUT());
 
-      const isFilled = (i) => {
-        const hasImage = page.images[i] && page.images[i].some(img => img !== null);
-        return (
-          hasImage ||
-          page.faceTexts[i] !== '' ||
-          page.dialogueTexts[i] !== '' ||
-          page.timeValues[i] !== '' ||
-          page.blendFiles[i] !== ''
-        );
-      };
-
-      let filledIndexes = [];
-      for (let i = 0; i < page.images.length; i++) {
-        if (isFilled(i)) filledIndexes.push(i);
+      if (!lastHadContent && flat.length > maxWithoutNewPage) {
+        flat.length = maxWithoutNewPage;
       }
 
-      while (filledIndexes.length > 5) {
-        const overflowIndexes = filledIndexes.slice(5);
-        const overflow = { images: [], imageIndices: [], faceTexts: [], drawingTexts: [], screenTexts: [], dialogueTexts: [], timeValues: [], blendFiles: [] };
-        for (let i = overflowIndexes.length - 1; i >= 0; i--) {
-          const idx = overflowIndexes[i];
-          overflow.images.unshift(page.images.splice(idx, 1)[0]);
-          overflow.imageIndices.unshift(page.imageIndices.splice(idx, 1)[0]);
-          overflow.faceTexts.unshift(page.faceTexts.splice(idx, 1)[0]);
-          overflow.drawingTexts.unshift(page.drawingTexts.splice(idx, 1)[0]);
-          overflow.screenTexts.unshift(page.screenTexts.splice(idx, 1)[0]);
-          overflow.dialogueTexts.unshift(page.dialogueTexts.splice(idx, 1)[0]);
-          overflow.timeValues.unshift(page.timeValues.splice(idx, 1)[0]);
-          overflow.blendFiles.unshift(page.blendFiles.splice(idx, 1)[0]);
-        }
-        if (newPages[pageIdx + 1]) {
-          let nextPage = { ...newPages[pageIdx + 1] };
-          nextPage.images = [...overflow.images, ...nextPage.images];
-          nextPage.imageIndices = [...overflow.imageIndices, ...nextPage.imageIndices];
-          nextPage.faceTexts = [...overflow.faceTexts, ...nextPage.faceTexts];
-          nextPage.drawingTexts = [...overflow.drawingTexts, ...(nextPage.drawingTexts || ['', '', '', '', ''])];
-          nextPage.screenTexts = [...overflow.screenTexts, ...(nextPage.screenTexts || ['', '', '', '', ''])];
-          nextPage.dialogueTexts = [...overflow.dialogueTexts, ...nextPage.dialogueTexts];
-          nextPage.timeValues = [...overflow.timeValues, ...nextPage.timeValues];
-          nextPage.blendFiles = [...overflow.blendFiles, ...nextPage.blendFiles];
-          newPages[pageIdx + 1] = nextPage;
-          pageIdx = pageIdx + 1;
-          page = nextPage;
-          filledIndexes = [];
-          for (let i = 0; i < page.images.length; i++) {
-            if (isFilled(i)) filledIndexes.push(i);
-          }
-        } else {
-          const EMPTY = () => ({
-            images: [[null], [null], [null], [null], [null]],
-            imageIndices: [0, 0, 0, 0, 0],
-            faceTexts: ['', '', '', '', ''],
-            drawingTexts: ['', '', '', '', ''],
-            screenTexts: ['', '', '', '', ''],
-            dialogueTexts: ['', '', '', '', ''],
-            timeValues: ['', '', '', '', ''],
-            blendFiles: ['', '', '', '', '']
-          });
-          const newPage = EMPTY();
-          for (let i = 0; i < overflow.images.length; i++) {
-            newPage.images[i] = overflow.images[i];
-            newPage.imageIndices[i] = overflow.imageIndices[i];
-            newPage.faceTexts[i] = overflow.faceTexts[i];
-            newPage.drawingTexts[i] = overflow.drawingTexts[i];
-            newPage.screenTexts[i] = overflow.screenTexts[i];
-            newPage.dialogueTexts[i] = overflow.dialogueTexts[i];
-            newPage.timeValues[i] = overflow.timeValues[i];
-            newPage.blendFiles[i] = overflow.blendFiles[i];
-          }
-          newPages.splice(pageIdx + 1, 0, newPage);
-          break;
-        }
-      }
-      newPages[pageIdx] = page;
-      return newPages;
+      if (flat.length === 0) return [EMPTY_PAGE()];
+      return regroupPagesFromFlatCuts(flat);
     });
   };
 
@@ -909,18 +865,7 @@ const StoryboardViewer = ({
     const globalCutNum = pageIdx * 5 + cutIdx + 1;
     if (!window.confirm(`カット ${globalCutNum} を削除しますか？\nカット内のデータがすべて消え、以降のカットが繰り上がります。`)) return;
     setPages(prev => {
-      const flat = prev.flatMap((page) =>
-        page.images.map((imgs, cIdx) => ({
-          images: imgs,
-          imageIndex: page.imageIndices[cIdx],
-          faceText: page.faceTexts[cIdx],
-          drawingText: (page.drawingTexts || [])[cIdx] || '',
-          screenText: (page.screenTexts || [])[cIdx] || '',
-          dialogueText: page.dialogueTexts[cIdx],
-          timeValue: page.timeValues[cIdx],
-          blendFile: page.blendFiles[cIdx]
-        }))
-      );
+      const flat = flattenPagesToCuts(prev);
       const delIdx = pageIdx * 5 + cutIdx;
       flat.splice(delIdx, 1);
       if (flat.length === 0) return [EMPTY_PAGE()];
@@ -1431,6 +1376,19 @@ const StoryboardViewer = ({
                         🗑
                       </button>
                     )}
+                    {/* カット挿入ボタン */}
+                    <button
+                      onClick={() => handleAddCutAt(pageIdx, cutIdx)}
+                      style={{
+                        padding: '4px 8px', fontSize: '13px',
+                        background: '#3730a3', color: 'white',
+                        border: 'none', borderRadius: '5px',
+                        cursor: 'pointer', fontFamily: 'inherit'
+                      }}
+                      title="このカットの後に空カットを挿入"
+                    >
+                      ＋
+                    </button>
                     {/* カット削除ボタン */}
                     <button
                       onClick={() => handleDeleteCut(pageIdx, cutIdx)}
@@ -2310,12 +2268,18 @@ const StoryboardViewer = ({
                             <AIAssistButton pageIdx={pageIdx} cutIdx={cutIdx} onAIAssist={handleAIAssist} />
                           )}
 
-                          {/* カット削除ボタン（フレーム右下） */}
+                          {/* カット挿入・削除ボタン（フレーム右下） */}
                           {!isExportingPDF && !areButtonsHidden && (
-                            <button type="button"
-                              onClick={e => { e.stopPropagation(); handleDeleteCut(pageIdx, cutIdx); }}
-                              style={{ position: 'absolute', bottom: '4px', right: '4px', height: '22px', background: 'rgba(239,68,68,0.85)', color: 'white', border: 'none', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 6px', whiteSpace: 'nowrap' }}
-                              title="このカットを削除（以降のカットが繰り上がります）">✕</button>
+                            <div style={{ position: 'absolute', bottom: '4px', right: '4px', display: 'flex', gap: '4px', zIndex: 10 }}>
+                              <button type="button"
+                                onClick={e => { e.stopPropagation(); handleAddCutAt(pageIdx, cutIdx); }}
+                                style={{ height: '22px', background: 'rgba(55,48,163,0.85)', color: 'white', border: 'none', borderRadius: '4px', fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 5px', whiteSpace: 'nowrap', lineHeight: 1 }}
+                                title="このカットの後に空カットを挿入">＋</button>
+                              <button type="button"
+                                onClick={e => { e.stopPropagation(); handleDeleteCut(pageIdx, cutIdx); }}
+                                style={{ height: '22px', background: 'rgba(239,68,68,0.85)', color: 'white', border: 'none', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 6px', whiteSpace: 'nowrap' }}
+                                title="このカットを削除（以降のカットが繰り上がります）">✕</button>
+                            </div>
                           )}
 
 
@@ -2363,17 +2327,6 @@ const StoryboardViewer = ({
                       </div>
                     ))}
 
-                    {/* 一時的に非表示: ここにカットを追加ボタン (＋ 行末)
-                    {!isExportingPDF && !areButtonsHidden && (
-                      <div style={{ position: 'relative', height: 0 }}>
-                        <button type="button"
-                          onClick={() => handleAddCutAt(pageIdx, page.images.length)}
-                          style={{ position: 'absolute', right: '-40px', top: '0', zIndex: 30, width: '24px', height: '24px', background: 'none', border: 'none', color: '#3730a3', fontSize: '22px', cursor: page.images.length >= 5 ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, pointerEvents: page.images.length >= 5 ? 'none' : 'auto', boxShadow: 'none' }}
-                          title="ここにカットを追加"
-                          disabled={page.images.length >= 5}>＋</button>
-                      </div>
-                    )}
-                    */}
                   </div>
                 </div>
 
