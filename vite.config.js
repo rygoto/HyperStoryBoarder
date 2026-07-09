@@ -15,6 +15,12 @@ export default defineConfig({
           'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
           'Access-Control-Allow-Headers': 'Content-Type, Authorization'
         }
+      },
+      // Firebase Storage: 開発時のgetBytes CORS回避（認証ヘッダ付きGETを中継）
+      '/__firebase_storage': {
+        target: 'https://firebasestorage.googleapis.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/__firebase_storage/, '')
       }
     }
   }

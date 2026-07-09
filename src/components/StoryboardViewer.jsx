@@ -1,10 +1,78 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import ExportPDFButton from './ExportPDFButton';
+import ExportDavinciButton from './ExportDavinciButton';
 import AIAssistButton from './ai-assistant/AIAssistButton';
 import StoryboardAIPanel from './ai-assistant/StoryboardAIPanel';
 import { useAuth } from '../hooks/useAuth';
 import { useStoryboard } from '../hooks/useStoryboard';
 import { uploadImage, isBase64DataURL, migrateBase64ToStorage } from '../services/storage-service';
+
+const ANIM_FRAME_RATES = [8, 12, 24];
+const DEFAULT_FRAME_RATE = 8;
+
+const resolveFrameRate = (fps) => (ANIM_FRAME_RATES.includes(fps) ? fps : DEFAULT_FRAME_RATE);
+
+const getCutFrameRate = (page, cutIdx, cutFps) => {
+  if (ANIM_FRAME_RATES.includes(cutFps)) return cutFps;
+  const bases = page?.frameRateBases;
+  if (Array.isArray(bases) && ANIM_FRAME_RATES.includes(bases[cutIdx])) return bases[cutIdx];
+  if (ANIM_FRAME_RATES.includes(page?.frameRateBase)) return page.frameRateBase;
+  return DEFAULT_FRAME_RATE;
+};
+
+const defaultFrameRateBases = () => [8, 8, 8, 8, 8];
+
+const formatSecondsFromFrames = (frames, fps) => {
+  const n = parseInt(String(frames), 10);
+  if (!n || n <= 0) return '';
+  const sec = n / fps;
+  return sec.toFixed(4).replace(/\.?0+$/, '') || '0';
+};
+
+const formatFramesFromSeconds = (seconds, fps) => {
+  const s = parseFloat(seconds);
+  if (isNaN(s) || s <= 0) return '';
+  return String(Math.max(1, Math.round(s * fps)));
+};
+
+// 「話者：セリフ」形式の場合はコロン以降のみをセリフ本文として扱う
+const extractDialogueContent = (text) => {
+  if (!text) return '';
+  const fullWidth = text.indexOf('：');
+  const halfWidth = text.indexOf(':');
+  let colonIdx = -1;
+  if (fullWidth >= 0 && halfWidth >= 0) colonIdx = Math.min(fullWidth, halfWidth);
+  else if (fullWidth >= 0) colonIdx = fullWidth;
+  else if (halfWidth >= 0) colonIdx = halfWidth;
+  return colonIdx >= 0 ? text.slice(colonIdx + 1) : text;
+};
+
+const countDialogueChars = (text) => extractDialogueContent(text).replace(/\s/g, '').length;
+
+const calcTimingFromDialogue = (dialogue, fps) => {
+  const charCount = countDialogueChars(dialogue);
+  if (charCount === 0) return null;
+  const frames = String(charCount);
+  return {
+    frames,
+    seconds: formatSecondsFromFrames(frames, fps)
+  };
+};
+
+const normalizePage = (page) => {
+  const legacyFps = page?.frameRateBase;
+  const frameRateBases = Array.from({ length: 5 }, (_, i) =>
+    getCutFrameRate(page, i, page.frameRateBases?.[i] ?? legacyFps)
+  );
+  return {
+    ...page,
+    imageIndices: page.imageIndices || [0, 0, 0, 0, 0],
+    drawingTexts: page.drawingTexts || ['', '', '', '', ''],
+    screenTexts: page.screenTexts || ['', '', '', '', ''],
+    frameValues: page.frameValues || ['', '', '', '', ''],
+    frameRateBases
+  };
+};
 
 const EMPTY_PAGE = () => ({
   images: [[null], [null], [null], [null], [null]],
@@ -14,6 +82,8 @@ const EMPTY_PAGE = () => ({
   screenTexts: ['', '', '', '', ''],
   dialogueTexts: ['', '', '', '', ''],
   timeValues: ['', '', '', '', ''],
+  frameValues: ['', '', '', '', ''],
+  frameRateBases: defaultFrameRateBases(),
   blendFiles: ['', '', '', '', '']
 });
 
@@ -25,6 +95,8 @@ const EMPTY_CUT = () => ({
   screenText: '',
   dialogueText: '',
   timeValue: '',
+  frameValue: '',
+  frameRateBase: DEFAULT_FRAME_RATE,
   blendFile: ''
 });
 
@@ -37,6 +109,7 @@ const isCutFilled = (cut) => {
     (cut.screenText || '') !== '' ||
     cut.dialogueText !== '' ||
     cut.timeValue !== '' ||
+    cut.frameValue !== '' ||
     cut.blendFile !== ''
   );
 };
@@ -51,9 +124,122 @@ const flattenPagesToCuts = (pages) =>
       screenText: (page.screenTexts || [])[cIdx] || '',
       dialogueText: page.dialogueTexts[cIdx],
       timeValue: page.timeValues[cIdx],
+      frameValue: (page.frameValues || [])[cIdx] || '',
+      frameRateBase: getCutFrameRate(page, cIdx),
       blendFile: page.blendFiles[cIdx]
     }))
   );
+
+const FrameRateSelector = ({ value, onChange, compact = false, mini = false }) => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: mini ? '1px' : compact ? '2px' : '4px' }}>
+    {!compact && !mini && <span style={{ fontSize: '11px', color: '#64748b', whiteSpace: 'nowrap' }}>fps:</span>}
+    {ANIM_FRAME_RATES.map((fps) => (
+      <button
+        key={fps}
+        type="button"
+        onClick={() => onChange(fps)}
+        style={{
+          fontSize: mini ? '9px' : compact ? '10px' : '11px',
+          padding: mini ? '1px 3px' : compact ? '2px 5px' : '3px 7px',
+          border: `1px solid ${value === fps ? '#2563eb' : '#d1d5db'}`,
+          borderRadius: '4px',
+          cursor: 'pointer',
+          background: value === fps ? '#2563eb' : '#f8fafc',
+          color: value === fps ? '#fff' : '#374151',
+          fontFamily: 'inherit',
+          fontWeight: value === fps ? 700 : 400,
+          lineHeight: 1.2,
+          minWidth: mini ? '18px' : undefined
+        }}
+        title={`${fps}コマ打ち`}
+      >
+        {fps}
+      </button>
+    ))}
+  </div>
+);
+
+const DialogueTimingButton = ({ onClick, disabled, mini = false }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    disabled={disabled}
+    style={{
+      fontSize: mini ? '9px' : '11px',
+      padding: mini ? '2px 4px' : '4px 8px',
+      border: `1px solid ${disabled ? '#e5e7eb' : '#93c5fd'}`,
+      borderRadius: '4px',
+      cursor: disabled ? 'not-allowed' : 'pointer',
+      background: disabled ? '#f9fafb' : '#eff6ff',
+      color: disabled ? '#9ca3af' : '#1d4ed8',
+      fontFamily: 'inherit',
+      fontWeight: 600,
+      lineHeight: 1.2,
+      whiteSpace: 'nowrap'
+    }}
+    title="セリフの文字数から尺を自動入力（「：」以降をカウント、fps文字=1秒=fpsコマ、空白除く）"
+  >
+    {mini ? '自動' : 'セリフ→尺'}
+  </button>
+);
+
+// セリフ入力欄（ホバーで全文を吹き出し表示）
+const DialogueTextarea = ({ value, onChange, placeholder, rows, textareaStyle }) => {
+  const [hovered, setHovered] = useState(false);
+  const text = value || '';
+  return (
+    <div
+      style={{ position: 'relative', flex: 1, minWidth: 0 }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <textarea
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        rows={rows}
+        style={{ ...textareaStyle, flex: undefined, width: '100%', boxSizing: 'border-box' }}
+      />
+      {hovered && text.trim() && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 'calc(100% + 8px)',
+            left: 0,
+            zIndex: 3000,
+            maxWidth: '360px',
+            minWidth: '180px',
+            width: 'max-content',
+            background: '#1f2937',
+            color: '#fff',
+            padding: '10px 12px',
+            borderRadius: '8px',
+            fontSize: '13px',
+            lineHeight: 1.6,
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            boxShadow: '0 6px 20px rgba(0,0,0,0.25)',
+            pointerEvents: 'none'
+          }}
+        >
+          {value}
+          <div
+            style={{
+              position: 'absolute',
+              top: '100%',
+              left: '18px',
+              width: 0,
+              height: 0,
+              borderLeft: '7px solid transparent',
+              borderRight: '7px solid transparent',
+              borderTop: '7px solid #1f2937'
+            }}
+          />
+        </div>
+      )}
+    </div>
+  );
+};
 
 const StoryboardViewer = ({ 
   storyboardId, 
@@ -482,13 +668,102 @@ const StoryboardViewer = ({
     if (value === '' || /^\d*\.?\d*$/.test(value)) {
       setPages(prev => {
         const newPages = [...prev];
+        const page = newPages[pageIdx];
+        const fps = getCutFrameRate(page, cutIdx);
+        const frameStr = value === '' ? '' : formatFramesFromSeconds(value, fps);
         newPages[pageIdx] = {
-          ...newPages[pageIdx],
-          timeValues: newPages[pageIdx].timeValues.map((t, idx) => idx === cutIdx ? value : t)
+          ...page,
+          timeValues: page.timeValues.map((t, idx) => idx === cutIdx ? value : t),
+          frameValues: (page.frameValues || ['', '', '', '', '']).map((f, idx) => idx === cutIdx ? frameStr : f)
         };
         return newPages;
       });
     }
+  };
+
+  const handleFrameChange = (pageIdx, cutIdx, value) => {
+    if (value !== '' && !/^\d+$/.test(value)) return;
+    setPages(prev => {
+      const newPages = [...prev];
+      const page = newPages[pageIdx];
+      const fps = getCutFrameRate(page, cutIdx);
+      const timeStr = value === '' ? '' : formatSecondsFromFrames(value, fps);
+      newPages[pageIdx] = {
+        ...page,
+        frameValues: (page.frameValues || ['', '', '', '', '']).map((f, idx) => idx === cutIdx ? value : f),
+        timeValues: page.timeValues.map((t, idx) => idx === cutIdx ? timeStr : t)
+      };
+      return newPages;
+    });
+  };
+
+  const handleFrameRateChange = (pageIdx, cutIdx, fps) => {
+    const newFps = resolveFrameRate(fps);
+    setPages(prev => {
+      const newPages = [...prev];
+      const page = newPages[pageIdx];
+      const frameValues = page.frameValues || ['', '', '', '', ''];
+      const fv = frameValues[cutIdx];
+      const t = page.timeValues[cutIdx];
+      let newFrameValue = fv;
+      let newTimeValue = t;
+      if (fv !== '') {
+        newTimeValue = formatSecondsFromFrames(fv, newFps);
+      } else if (t !== '') {
+        newFrameValue = formatFramesFromSeconds(t, newFps);
+      }
+      newPages[pageIdx] = {
+        ...page,
+        frameRateBases: (page.frameRateBases || defaultFrameRateBases()).map((r, idx) =>
+          idx === cutIdx ? newFps : getCutFrameRate(page, idx)
+        ),
+        frameValues: frameValues.map((f, idx) => idx === cutIdx ? newFrameValue : f),
+        timeValues: page.timeValues.map((tv, idx) => idx === cutIdx ? newTimeValue : tv)
+      };
+      return newPages;
+    });
+  };
+
+  const applyDialogueTimingToPage = (page, cutIdx) => {
+    const timing = calcTimingFromDialogue(page.dialogueTexts[cutIdx], getCutFrameRate(page, cutIdx));
+    if (!timing) return page;
+    return {
+      ...page,
+      frameValues: (page.frameValues || ['', '', '', '', '']).map((f, idx) =>
+        idx === cutIdx ? timing.frames : f
+      ),
+      timeValues: page.timeValues.map((t, idx) => idx === cutIdx ? timing.seconds : t)
+    };
+  };
+
+  const handleApplyDialogueTiming = (pageIdx, cutIdx) => {
+    setPages(prev => {
+      const page = prev[pageIdx];
+      const updated = applyDialogueTimingToPage(page, cutIdx);
+      if (updated === page) return prev;
+      const newPages = [...prev];
+      newPages[pageIdx] = updated;
+      return newPages;
+    });
+  };
+
+  const handleApplyDialogueTimingAll = () => {
+    setPages(prev => prev.map(page => {
+      let updated = page;
+      for (let cutIdx = 0; cutIdx < 5; cutIdx++) {
+        const next = applyDialogueTimingToPage(updated, cutIdx);
+        if (next !== updated) updated = next;
+      }
+      return updated;
+    }));
+  };
+
+  const getCutDurationLabel = (cut) => {
+    const fps = resolveFrameRate(cut.frameRateBase);
+    if (cut.frameValue) return `${cut.frameValue}コマ(${fps})`;
+    const sec = parseFloat(cut.timeValue);
+    if (!isNaN(sec) && sec > 0) return `${sec}秒`;
+    return '1秒';
   };
 
   const handleBlendFileChange = (pageIdx, cutIdx, file) => {
@@ -552,6 +827,8 @@ const StoryboardViewer = ({
         screenText: (page.screenTexts || [])[cutIdx] || '',
         dialogueText: page.dialogueTexts[cutIdx],
         timeValue: page.timeValues[cutIdx],
+        frameValue: (page.frameValues || [])[cutIdx] || '',
+        frameRateBase: getCutFrameRate(page, cutIdx),
         blendFile: page.blendFiles[cutIdx],
         pageIdx,
         cutIdx
@@ -665,14 +942,14 @@ const StoryboardViewer = ({
           if (page.images && Array.isArray(page.images) && page.images.length > 0) {
             const isOldFormat = !Array.isArray(page.images[0]);
             if (isOldFormat) {
-              return {
+              return normalizePage({
                 ...page,
                 images: page.images.map(img => [img]),
                 imageIndices: page.imageIndices || [0, 0, 0, 0, 0]
-              };
+              });
             }
           }
-          return { ...page, imageIndices: page.imageIndices || [0, 0, 0, 0, 0] };
+          return normalizePage({ ...page, imageIndices: page.imageIndices || [0, 0, 0, 0, 0] });
         });
         setPages(convertedPages);
         alert('読み込みました！');
@@ -747,6 +1024,28 @@ const StoryboardViewer = ({
     URL.revokeObjectURL(url);
   };
 
+  // セリフだけをカットまたぎの連番でMarkdown出力
+  const handleExportDialogueMd = () => {
+    const cuts = flattenPagesToCuts(pages);
+    const lines = [];
+    cuts.forEach((cut, idx) => {
+      const text = (cut.dialogueText || '').trim();
+      if (!text) return;
+      const oneLine = text.replace(/\s*\n\s*/g, ' ');
+      lines.push(`${idx + 1}. ${oneLine}`);
+    });
+    const safeName = storyboardName && storyboardName.trim() ? storyboardName.trim() : 'storyboard';
+    const body = lines.length ? lines.join('\n') : '（セリフがありません）';
+    const md = `# ${safeName} セリフ\n\n${body}\n`;
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${safeName}_セリフ.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   // JSONインポート
   const handleImport = (e) => {
     const file = e.target.files[0];
@@ -769,14 +1068,14 @@ const StoryboardViewer = ({
           if (page.images && Array.isArray(page.images) && page.images.length > 0) {
             const isOldFormat = !Array.isArray(page.images[0]);
             if (isOldFormat) {
-              return {
+              return normalizePage({
                 ...page,
                 images: page.images.map(img => [img]),
                 imageIndices: page.imageIndices || [0, 0, 0, 0, 0]
-              };
+              });
             }
           }
-          return { ...page, imageIndices: page.imageIndices || [0, 0, 0, 0, 0] };
+          return normalizePage({ ...page, imageIndices: page.imageIndices || [0, 0, 0, 0, 0] });
         });
         
         setPages(convertedPages);
@@ -794,16 +1093,7 @@ const StoryboardViewer = ({
     for (let i = 0; i < flatCuts.length; i += 5) {
       const group = flatCuts.slice(i, i + 5);
       while (group.length < 5) {
-        group.push({
-          images: [null],
-          imageIndex: 0,
-          faceText: '',
-          drawingText: '',
-          screenText: '',
-          dialogueText: '',
-          timeValue: '',
-          blendFile: ''
-        });
+        group.push(EMPTY_CUT());
       }
       pages.push({
         images: group.map(c => c.images || [c.image || null]),
@@ -813,6 +1103,8 @@ const StoryboardViewer = ({
         screenTexts: group.map(c => c.screenText || ''),
         dialogueTexts: group.map(c => c.dialogueText),
         timeValues: group.map(c => c.timeValue),
+        frameValues: group.map(c => c.frameValue || ''),
+        frameRateBases: group.map(c => resolveFrameRate(c.frameRateBase)),
         blendFiles: group.map(c => c.blendFile)
       });
     }
@@ -890,18 +1182,7 @@ const StoryboardViewer = ({
   // カット移動（上/下）
   const handleMoveCut = (fromPageIdx, fromCutIdx, direction) => {
     setPages(prev => {
-      const flat = prev.flatMap((page) =>
-        page.images.map((imgs, cIdx) => ({
-          images: imgs,
-          imageIndex: page.imageIndices[cIdx],
-          faceText: page.faceTexts[cIdx],
-          drawingText: (page.drawingTexts || [])[cIdx] || '',
-          screenText: (page.screenTexts || [])[cIdx] || '',
-          dialogueText: page.dialogueTexts[cIdx],
-          timeValue: page.timeValues[cIdx],
-          blendFile: page.blendFiles[cIdx]
-        }))
-      );
+      const flat = flattenPagesToCuts(prev);
       const fromIdx = fromPageIdx * 5 + fromCutIdx;
       const toIdx = fromIdx + direction;
       if (toIdx < 0 || toIdx >= flat.length) return prev;
@@ -948,10 +1229,12 @@ const StoryboardViewer = ({
     faceInputRow: { marginBottom: '2px', height: '165px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'transparent' },
     faceInput: { width: '100%', height: '40px', border: '1px solid #d1d5db', borderRadius: '4px', padding: '4px 8px', fontSize: '12px', resize: 'none', outline: 'none', fontFamily: 'inherit', marginBottom: '6px' },
     contentColumn: { flex: 1, borderRight: '1px solid #d1d5db' },
-    timeColumn: { width: '60px' },
+    timeColumn: { width: '92px', minWidth: '92px' },
     timeContent: { padding: '16px 4px' },
-    timeInputRow: { marginBottom: '16px', height: '144px', display: 'flex', alignItems: 'center' },
-    timeInput: { width: '100%', height: '40px', border: '1px solid #d1d5db', borderRadius: '4px', padding: '8px 4px', fontSize: '12px', textAlign: 'center', outline: 'none', fontFamily: 'inherit' },
+    timeInputRow: { marginBottom: '16px', height: '144px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '3px' },
+    timeInput: { width: '100%', height: '28px', border: '1px solid #d1d5db', borderRadius: '4px', padding: '4px 2px', fontSize: '11px', textAlign: 'center', outline: 'none', fontFamily: 'inherit' },
+    frameInput: { width: '100%', height: '28px', border: '1px solid #d1d5db', borderRadius: '4px', padding: '4px 2px', fontSize: '11px', textAlign: 'center', outline: 'none', fontFamily: 'inherit', background: '#f8fafc' },
+    timeFieldLabel: { fontSize: '9px', color: '#9ca3af', lineHeight: 1 },
     footerNumber: { textAlign: 'right', padding: '8px', fontSize: '14px', color: '#6b7280' }
   };
 
@@ -1011,7 +1294,7 @@ const StoryboardViewer = ({
               fontWeight: 600
             }}>
               {currentFrame + 1} / {totalCuts}
-              {playbackMode === 'auto' && ` · ${parseFloat(flatCuts[currentFrame].timeValue) || 1}秒`}
+              {playbackMode === 'auto' && ` · ${getCutDurationLabel(flatCuts[currentFrame])}`}
             </div>
 
             {/* セリフ（コントロールの上） */}
@@ -1255,11 +1538,29 @@ const StoryboardViewer = ({
             ■ 停止
           </button>
 
+          <DialogueTimingButton
+            disabled={!pages.some(p => p.dialogueTexts.some(t => countDialogueChars(t) > 0))}
+            onClick={handleApplyDialogueTimingAll}
+          />
+
           <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: '#374151', userSelect: 'none' }}>
             <input type="checkbox" checked={isAutoSpeak} onChange={e => setIsAutoSpeak(e.target.checked)}
               disabled={isPlaying} style={{ margin: 0 }} />
             セリフ読み上げ
           </label>
+
+          <button
+            onClick={handleExportDialogueMd}
+            style={{
+              padding: '8px 14px', fontSize: '14px',
+              background: '#0ea5e9', color: 'white',
+              border: 'none', borderRadius: '6px',
+              cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600
+            }}
+            title="全カットのセリフを連番付きのMarkdownで書き出します"
+          >
+            セリフMD出力
+          </button>
         </div>
 
         {/* ---- モバイル ストップウォッチ 右下オーバーレイ ---- */}
@@ -1565,12 +1866,12 @@ const StoryboardViewer = ({
                   />
 
                   <div style={{ display: 'flex', gap: '6px', marginTop: '6px', alignItems: 'flex-start' }}>
-                    <textarea
+                    <DialogueTextarea
                       value={page.dialogueTexts[cutIdx]}
                       onChange={(e) => handleDialogueChange(pageIdx, cutIdx, e.target.value)}
                       placeholder="セリフ..."
                       rows={2}
-                      style={{
+                      textareaStyle={{
                         flex: 1,
                         border: '1px solid #e2e8f0', borderRadius: '6px',
                         padding: '6px 10px', fontSize: '13px',
@@ -1603,8 +1904,8 @@ const StoryboardViewer = ({
                     </button>
                   </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
-                    <span style={{ fontSize: '12px', color: '#64748b' }}>秒数:</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '12px', color: '#64748b' }}>秒:</span>
                     <input
                       type="text"
                       value={page.timeValues[cutIdx]}
@@ -1612,7 +1913,7 @@ const StoryboardViewer = ({
                       placeholder="1.0"
                       inputMode="decimal"
                       style={{
-                        width: '64px',
+                        width: '56px',
                         border: '1px solid #e2e8f0', borderRadius: '6px',
                         padding: '5px 8px', fontSize: '13px',
                         textAlign: 'center', outline: 'none',
@@ -1620,6 +1921,33 @@ const StoryboardViewer = ({
                         color: '#111',
                         fontWeight: 600
                       }}
+                    />
+                    <span style={{ fontSize: '12px', color: '#64748b' }}>コマ:</span>
+                    <input
+                      type="text"
+                      value={(page.frameValues || [])[cutIdx] || ''}
+                      onChange={(e) => handleFrameChange(pageIdx, cutIdx, e.target.value)}
+                      placeholder="12"
+                      inputMode="numeric"
+                      style={{
+                        width: '48px',
+                        border: '1px solid #e2e8f0', borderRadius: '6px',
+                        padding: '5px 8px', fontSize: '13px',
+                        textAlign: 'center', outline: 'none',
+                        fontFamily: 'inherit', background: '#f8fafc',
+                        color: '#111',
+                        fontWeight: 600
+                      }}
+                    />
+                    <FrameRateSelector
+                      mini
+                      value={getCutFrameRate(page, cutIdx)}
+                      onChange={(fps) => handleFrameRateChange(pageIdx, cutIdx, fps)}
+                    />
+                    <DialogueTimingButton
+                      mini
+                      disabled={!countDialogueChars(page.dialogueTexts[cutIdx])}
+                      onClick={() => handleApplyDialogueTiming(pageIdx, cutIdx)}
                     />
                     {/* 順番移動ボタン */}
                     <div style={{ marginLeft: 'auto', display: 'flex', gap: '4px' }}>
@@ -1712,6 +2040,7 @@ const StoryboardViewer = ({
       {/* PDF保存ボタンとストップウォッチを横並びに */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '6px' }}>
         <ExportPDFButton targetRef={exportRef} pageRefs={pageRefs} pages={pages} setIsExportingPDF={setIsExportingPDF} />
+        <ExportDavinciButton flatCuts={flatCuts} storyboardName={storyboardName} />
         
         {/* ボタン表示切り替えボタン */}
         <button
@@ -1851,6 +2180,17 @@ const StoryboardViewer = ({
         >
           エクスポート
         </button>
+        <button
+          onClick={handleExportDialogueMd}
+          style={{ padding: '8px 16px', fontSize: '14px', background: '#0ea5e9', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontFamily: 'inherit' }}
+          title="全カットのセリフを連番付きのMarkdownで書き出します"
+        >
+          セリフMD出力
+        </button>
+        <DialogueTimingButton
+          disabled={!pages.some(p => p.dialogueTexts.some(t => countDialogueChars(t) > 0))}
+          onClick={handleApplyDialogueTimingAll}
+        />
         <label style={{
           padding: '8px', display: 'inline-block', cursor: 'pointer',
           background: '#6366f1', color: 'white', borderRadius: '4px',
@@ -1880,7 +2220,7 @@ const StoryboardViewer = ({
             <div style={{ width: '512px', height: '288px', background: 'black', border: '6px solid #2563eb', borderRadius: '12px', boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }} />
           )}
           <div style={{ marginTop: '12px', fontSize: '18px', color: '#374151' }}>
-            {currentFrame + 1}枚目 / {playbackMode === 'auto' ? `${parseFloat(flatCuts[currentFrame].timeValue) || 1}秒` : '手動'}
+            {currentFrame + 1}枚目 / {playbackMode === 'auto' ? getCutDurationLabel(flatCuts[currentFrame]) : '手動'}
           </div>
           {playbackMode === 'manual' && (
             <div style={{ marginTop: '6px', fontSize: '13px', color: '#6b7280' }}>←/→で移動（Escで停止）</div>
@@ -2160,23 +2500,12 @@ const StoryboardViewer = ({
                           onDrop={() => {
                             if (!draggedCut || (draggedCut.pageIdx === pageIdx && draggedCut.cutIdx === cutIdx)) return;
                             setPages(prev => {
-                              const flatCuts = prev.flatMap((page, pIdx) =>
-                                page.images.map((imgs, cIdx) => ({
-                                  images: imgs,
-                                  imageIndex: page.imageIndices[cIdx],
-                                  faceText: page.faceTexts[cIdx],
-                                  drawingText: (page.drawingTexts || [])[cIdx] || '',
-                                  screenText: (page.screenTexts || [])[cIdx] || '',
-                                  dialogueText: page.dialogueTexts[cIdx],
-                                  timeValue: page.timeValues[cIdx],
-                                  blendFile: page.blendFiles[cIdx]
-                                }))
-                              );
+                              const flatCutsList = flattenPagesToCuts(prev);
                               const fromIdx = draggedCut.pageIdx * 5 + draggedCut.cutIdx;
                               const toIdx = pageIdx * 5 + cutIdx;
-                              const [moved] = flatCuts.splice(fromIdx, 1);
-                              flatCuts.splice(toIdx, 0, moved);
-                              return regroupPagesFromFlatCuts(flatCuts);
+                              const [moved] = flatCutsList.splice(fromIdx, 1);
+                              flatCutsList.splice(toIdx, 0, moved);
+                              return regroupPagesFromFlatCuts(flatCutsList);
                             });
                             setDraggedCut(null);
                           }}
@@ -2404,7 +2733,8 @@ const StoryboardViewer = ({
                             </div>
                           ) : (
                             <>
-                              <textarea style={{ ...styles.faceInput, marginBottom: 0, flex: 1 }}
+                              <DialogueTextarea
+                                textareaStyle={{ ...styles.faceInput, marginBottom: 0, flex: 1 }}
                                 value={page.dialogueTexts[cutIdx]}
                                 onChange={(e) => handleDialogueChange(pageIdx, cutIdx, e.target.value)}
                                 placeholder="セリフ..." rows={1} />
@@ -2424,14 +2754,30 @@ const StoryboardViewer = ({
               {/* 右側のセクション */}
               <div style={styles.rightSection}>
                 <div style={styles.timeColumn}>
-                  <div style={styles.columnHeader}>秒</div>
+                  <div style={styles.columnHeader}>秒/コマ</div>
                   <div style={styles.timeContent}>
                     {[0, 1, 2, 3, 4].map((cutIdx) => (
                       <div key={cutIdx} style={styles.timeInputRow}>
+                        <FrameRateSelector
+                          mini
+                          value={getCutFrameRate(page, cutIdx)}
+                          onChange={(fps) => handleFrameRateChange(pageIdx, cutIdx, fps)}
+                        />
+                        <span style={styles.timeFieldLabel}>秒</span>
                         <input type="text" style={styles.timeInput}
                           value={page.timeValues[cutIdx]}
                           onChange={(e) => handleTimeChange(pageIdx, cutIdx, e.target.value)}
                           placeholder="0.0" inputMode="decimal" />
+                        <span style={styles.timeFieldLabel}>コマ</span>
+                        <input type="text" style={styles.frameInput}
+                          value={(page.frameValues || [])[cutIdx] || ''}
+                          onChange={(e) => handleFrameChange(pageIdx, cutIdx, e.target.value)}
+                          placeholder="12" inputMode="numeric" />
+                        <DialogueTimingButton
+                          mini
+                          disabled={!countDialogueChars(page.dialogueTexts[cutIdx])}
+                          onClick={() => handleApplyDialogueTiming(pageIdx, cutIdx)}
+                        />
                       </div>
                     ))}
                   </div>

@@ -1,55 +1,7 @@
 import React, { useState } from 'react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
-import { ref as storageRef, getBytes } from 'firebase/storage';
-import { storage } from '../config/firebase';
-
-const isFirebaseStorageUrl = (url) =>
-  url.includes('firebasestorage.googleapis.com') ||
-  url.includes('.firebasestorage.app');
-
-// Firebase Storage URLからストレージパスを抽出する
-// 例: https://firebasestorage.googleapis.com/v0/b/BUCKET/o/images%2Fuid%2Ffile.jpg?alt=media&token=...
-const parseStoragePath = (url) => {
-  try {
-    const urlObj = new URL(url);
-    const match = urlObj.pathname.match(/\/v0\/b\/[^/]+\/o\/(.+)/);
-    if (!match) return null;
-    return decodeURIComponent(match[1]);
-  } catch {
-    return null;
-  }
-};
-
-const blobToDataURL = (blob) =>
-  new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-
-// Firebase Storage SDKのgetBytesを使ってCORS制限を回避しつつ画像をData URLに変換する
-const fetchImageAsDataURL = async (url) => {
-  if (isFirebaseStorageUrl(url)) {
-    const path = parseStoragePath(url);
-    if (path) {
-      const imageRef = storageRef(storage, path);
-      const bytes = await getBytes(imageRef);
-      const lowerUrl = url.toLowerCase();
-      const mimeType = lowerUrl.includes('.png') ? 'image/png'
-        : lowerUrl.includes('.gif') ? 'image/gif'
-        : lowerUrl.includes('.webp') ? 'image/webp'
-        : 'image/jpeg';
-      const blob = new Blob([bytes], { type: mimeType });
-      return blobToDataURL(blob);
-    }
-  }
-  // Firebase以外のURLはfetchで試みる
-  const res = await fetch(url, { cache: 'force-cache' });
-  const blob = await res.blob();
-  return blobToDataURL(blob);
-};
+import { fetchImageAsDataURL } from '../services/image-fetcher';
 
 // ページ内の全<img>をData URLに差し替え、元のsrcリストを返す
 const replaceImagesWithDataURLs = async (element) => {
