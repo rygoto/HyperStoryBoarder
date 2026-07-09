@@ -143,11 +143,17 @@ const DesktopReadOnlyPage = ({ page, globalPageIdx, storyboardId, onOpen, curren
         <div style={ds.timeColumn}>
           <div style={ds.columnHeader}>時間</div>
           <div style={ds.timeContent}>
-            {page.timeValues?.map((val, cutIdx) => (
+            {page.timeValues?.map((val, cutIdx) => {
+              const frameVal = page.frameValues?.[cutIdx] || '';
+              const fps = page.frameRateBases?.[cutIdx] ?? page.frameRateBase ?? 8;
+              const display = frameVal
+                ? `${frameVal}コマ(${fps})${val ? `\n${val}秒` : ''}`
+                : (val || '');
+              return (
               <div key={cutIdx} style={ds.timeInputRow}>
-                <div style={ds.timeText}>{val || ''}</div>
+                <div style={{ ...ds.timeText, whiteSpace: 'pre-line' }}>{display}</div>
               </div>
-            ))}
+            );})}
           </div>
         </div>
       </div>
@@ -168,6 +174,11 @@ const MobileCutCard = ({ page, cutIdx, globalCutNum, storyboardId, onOpen, isCur
   const drawingText = page.drawingTexts?.[cutIdx] || '';
   const screenText = page.screenTexts?.[cutIdx] || '';
   const timeValue = page.timeValues?.[cutIdx] || '';
+  const frameValue = page.frameValues?.[cutIdx] || '';
+  const cutFps = page.frameRateBases?.[cutIdx] ?? page.frameRateBase ?? 8;
+  const timeDisplay = frameValue
+    ? (timeValue ? `${frameValue}コマ(${cutFps}) / ${timeValue}秒` : `${frameValue}コマ(${cutFps})`)
+    : timeValue;
 
   return (
     <div style={{
@@ -241,9 +252,9 @@ const MobileCutCard = ({ page, cutIdx, globalCutNum, storyboardId, onOpen, isCur
             ? <div style={{ flex: 1, border: '1px solid #e2e8f0', borderRadius: '6px', padding: '6px 10px', fontSize: '13px', background: '#f8fafc', color: '#111', fontWeight: 600, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{dialogueText}</div>
             : <div style={{ flex: 1, border: '1px dashed #e2e8f0', borderRadius: '6px', padding: '6px 10px', fontSize: '13px', color: '#cbd5e1' }}>セリフなし</div>
           }
-          {timeValue && (
+          {timeDisplay && (
             <div style={{ padding: '6px 10px', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '12px', color: '#64748b', background: '#f8fafc', whiteSpace: 'nowrap' }}>
-              ⏱ {timeValue}
+              ⏱ {timeDisplay}
             </div>
           )}
         </div>
