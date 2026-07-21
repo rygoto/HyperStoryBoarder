@@ -142,6 +142,7 @@ export const useStoryboard = () => {
       const storyboardData = {
         name: name || '新しい絵コンテ',
         pages: serializePages(initialPages),
+        dialogueCharsPerSecond: 5,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
         createdBy: user.uid,
@@ -164,7 +165,7 @@ export const useStoryboard = () => {
   }, [user]);
 
   // ストーリーボードを保存（デバウンス付き）
-  const saveStoryboard = useCallback((storyboardId, pages, name) => {
+  const saveStoryboard = useCallback((storyboardId, pages, name, dialogueCharsPerSecond) => {
     if (!user || !storyboardId) return;
 
     // 既存のタイマーをクリア
@@ -191,6 +192,11 @@ export const useStoryboard = () => {
         // 名前が指定されている場合は追加
         if (name !== undefined) {
           updateData.name = name;
+        }
+
+        if (dialogueCharsPerSecond !== undefined) {
+          const rate = parseFloat(dialogueCharsPerSecond);
+          updateData.dialogueCharsPerSecond = !isNaN(rate) && rate > 0 ? rate : 5;
         }
 
         await setDoc(docRef, updateData, { merge: true });

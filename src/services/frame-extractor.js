@@ -1,3 +1,5 @@
+import { formatDialogueDisplay, getCutDialogueLines } from '../utils/dialogue';
+
 // フレーム抽出機能
 export const extractContextFrames = (pages, currentPageIdx, currentCutIdx) => {
   if (!pages || pages.length === 0) {
@@ -52,10 +54,12 @@ export const getFrameData = (pages, pageIdx, cutIdx) => {
   }
 
   const page = pages[pageIdx];
+  const lines = getCutDialogueLines(page, cutIdx);
   return {
     image: page.images[cutIdx],
     faceText: page.faceTexts[cutIdx],
-    dialogueText: page.dialogueTexts[cutIdx],
+    dialogueText: formatDialogueDisplay(lines),
+    dialogueLines: lines,
     timeValue: page.timeValues[cutIdx],
     blendFile: page.blendFiles[cutIdx],
     pageIdx,

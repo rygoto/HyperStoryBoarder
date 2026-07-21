@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { formatDialogueDisplay, getCutDialogueLines } from '../utils/dialogue';
 
 const GROUP_LABELS = ['A', 'B', 'C', 'D', 'E'];
 
@@ -106,11 +107,22 @@ const DesktopReadOnlyPage = ({ page, globalPageIdx, storyboardId, onOpen, curren
         <div style={ds.faceColumn}>
           <div style={ds.columnHeader}>台詞</div>
           <div style={ds.faceContent}>
-            {page.dialogueTexts?.map((text, cutIdx) => (
+            {[0, 1, 2, 3, 4].map((cutIdx) => {
+              const lines = getCutDialogueLines(page, cutIdx).filter((line) => line.speaker || line.text);
+              return (
               <div key={cutIdx} style={{ ...ds.faceInputRow, height: '165px', maxHeight: '165px', overflowY: 'auto', overflowX: 'hidden', alignItems: 'stretch', justifyContent: 'flex-start', paddingTop: '8px', paddingBottom: '8px', boxSizing: 'border-box' }}>
-                <div style={{ ...ds.faceText, minHeight: 'unset' }}>{text || ''}</div>
+                {lines.map((line, lineIdx) => (
+                  <div key={lineIdx} style={{ display: 'flex', gap: '4px', width: '100%', marginBottom: '4px', alignItems: 'flex-start' }}>
+                    <span title={line.speaker} style={{ width: '16px', flexShrink: 0, color: '#64748b', fontSize: '10px', fontWeight: 700, textAlign: 'center', overflow: 'hidden' }}>
+                      {line.speaker.trim().slice(0, 1)}
+                    </span>
+                    <span style={{ flex: 1, minWidth: 0, fontSize: '12px', lineHeight: 1.45, wordBreak: 'break-word' }}>
+                      {line.text}
+                    </span>
+                  </div>
+                ))}
               </div>
-            ))}
+            );})}
           </div>
         </div>
         <div style={ds.contentColumn}>
@@ -170,7 +182,11 @@ const MobileCutCard = ({ page, cutIdx, globalCutNum, storyboardId, onOpen, isCur
   const currentImage = Array.isArray(cutImages) ? cutImages[currentImgIdx] : null;
   const hasMultiple = Array.isArray(cutImages) && cutImages.filter(Boolean).length > 1;
   const faceText = page.faceTexts?.[cutIdx] || '';
-  const dialogueText = page.dialogueTexts?.[cutIdx] || '';
+  const dialogueLines = getCutDialogueLines(page, cutIdx);
+  const dialogueText = dialogueLines
+    .filter((line) => line.speaker || line.text)
+    .map((line) => (line.speaker ? `${line.speaker}：${line.text}` : line.text))
+    .join('\n');
   const drawingText = page.drawingTexts?.[cutIdx] || '';
   const screenText = page.screenTexts?.[cutIdx] || '';
   const timeValue = page.timeValues?.[cutIdx] || '';
@@ -525,7 +541,8 @@ const GroupCombinedViewer = ({ storyboards, onOpenStoryboard }) => {
           const cutImages = page.images?.[cutIdx];
           return {
             image: Array.isArray(cutImages) ? cutImages[currentIdx] : null,
-            dialogueText: page.dialogueTexts?.[cutIdx] || '',
+            dialogueText: formatDialogueDisplay(getCutDialogueLines(page, cutIdx)),
+            dialogueLines: getCutDialogueLines(page, cutIdx),
             timeValue: page.timeValues?.[cutIdx] || '',
             sbName: sb.name,
             sbGroup: sb.group,

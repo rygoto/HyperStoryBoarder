@@ -292,6 +292,7 @@ const StoryboardManager = () => {
           storyboardId={selectedStoryboardId}
           initialPages={currentStoryboard.pages}
           storyboardName={currentStoryboard.name}
+          initialDialogueCharsPerSecond={currentStoryboard.dialogueCharsPerSecond ?? 5}
         />
       </div>
     );
