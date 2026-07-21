@@ -52,8 +52,12 @@ export const buildFcpxml = ({ projectName, fps, width, height, items }) => {
       const assetId = `a${assetSeq}`;
       const src = escapeXml(item.fileName); // 例: images/0001.png（fcpxmlからの相対パス）
       assets.push(
+        // 静止画はレート未定義フォーマット(rStill)を参照する。
+        // frameDuration付きの動画フォーマットを参照すると、Resolveが
+        // 「その尺ぶんのフレームがある動画」と誤解し、2フレーム目以降の
+        // 中身が無いためチカチカ切り替わって見える。
         `    <asset id="${assetId}" name="${clipName}" start="0s" duration="${framesToTime(frames)}" ` +
-          `hasVideo="1" format="r1" videoSources="1">\n` +
+          `hasVideo="1" format="rStill" videoSources="1">\n` +
           `      <media-rep kind="original-media" src="${src}"/>\n` +
           `    </asset>`
       );
@@ -79,6 +83,7 @@ export const buildFcpxml = ({ projectName, fps, width, height, items }) => {
 <fcpxml version="1.9">
   <resources>
     <format id="r1" name="FFVideoFormat${Math.round(fps)}p" frameDuration="${frameDur}" width="${width}" height="${height}" colorSpace="1-1-1 (Rec. 709)"/>
+    <format id="rStill" name="FFVideoFormatRateUndefined" width="${width}" height="${height}" colorSpace="1-1-1 (Rec. 709)"/>
 ${assets.join('\n')}
   </resources>
   <library>

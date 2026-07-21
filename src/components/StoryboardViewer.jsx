@@ -5,7 +5,19 @@ import AIAssistButton from './ai-assistant/AIAssistButton';
 import StoryboardAIPanel from './ai-assistant/StoryboardAIPanel';
 import { useAuth } from '../hooks/useAuth';
 import { useStoryboard } from '../hooks/useStoryboard';
-import { uploadImage, isBase64DataURL, migrateBase64ToStorage } from '../services/storage-service';
+import CutDialogueEditor from './CutDialogueEditor';
+import {
+  DEFAULT_DIALOGUE_CHARS_PER_SECOND,
+  EMPTY_DIALOGUE_LINE,
+  calcTimingFromDialogueLines,
+  countDialogueLinesChars,
+  emptyDialogueLinesForPage,
+  formatDialogueDisplay,
+  formatDialogueSpeakText,
+  getCutDialogueLines,
+  isDialogueLinesFilled,
+  normalizePageDialogues
+} from '../utils/dialogue';
 
 const ANIM_FRAME_RATES = [8, 12, 24];
 const DEFAULT_FRAME_RATE = 8;
@@ -35,43 +47,19 @@ const formatFramesFromSeconds = (seconds, fps) => {
   return String(Math.max(1, Math.round(s * fps)));
 };
 
-// 「話者：セリフ」形式の場合はコロン以降のみをセリフ本文として扱う
-const extractDialogueContent = (text) => {
-  if (!text) return '';
-  const fullWidth = text.indexOf('：');
-  const halfWidth = text.indexOf(':');
-  let colonIdx = -1;
-  if (fullWidth >= 0 && halfWidth >= 0) colonIdx = Math.min(fullWidth, halfWidth);
-  else if (fullWidth >= 0) colonIdx = fullWidth;
-  else if (halfWidth >= 0) colonIdx = halfWidth;
-  return colonIdx >= 0 ? text.slice(colonIdx + 1) : text;
-};
-
-const countDialogueChars = (text) => extractDialogueContent(text).replace(/\s/g, '').length;
-
-const calcTimingFromDialogue = (dialogue, fps) => {
-  const charCount = countDialogueChars(dialogue);
-  if (charCount === 0) return null;
-  const frames = String(charCount);
-  return {
-    frames,
-    seconds: formatSecondsFromFrames(frames, fps)
-  };
-};
-
 const normalizePage = (page) => {
   const legacyFps = page?.frameRateBase;
   const frameRateBases = Array.from({ length: 5 }, (_, i) =>
     getCutFrameRate(page, i, page.frameRateBases?.[i] ?? legacyFps)
   );
-  return {
+  return normalizePageDialogues({
     ...page,
     imageIndices: page.imageIndices || [0, 0, 0, 0, 0],
     drawingTexts: page.drawingTexts || ['', '', '', '', ''],
     screenTexts: page.screenTexts || ['', '', '', '', ''],
     frameValues: page.frameValues || ['', '', '', '', ''],
     frameRateBases
-  };
+  });
 };
 
 const EMPTY_PAGE = () => ({
@@ -80,7 +68,7 @@ const EMPTY_PAGE = () => ({
   faceTexts: ['', '', '', '', ''],
   drawingTexts: ['', '', '', '', ''],
   screenTexts: ['', '', '', '', ''],
-  dialogueTexts: ['', '', '', '', ''],
+  dialogueLines: emptyDialogueLinesForPage(),
   timeValues: ['', '', '', '', ''],
   frameValues: ['', '', '', '', ''],
   frameRateBases: defaultFrameRateBases(),
@@ -93,7 +81,7 @@ const EMPTY_CUT = () => ({
   faceText: '',
   drawingText: '',
   screenText: '',
-  dialogueText: '',
+  dialogueLines: [EMPTY_DIALOGUE_LINE()],
   timeValue: '',
   frameValue: '',
   frameRateBase: DEFAULT_FRAME_RATE,
@@ -107,7 +95,7 @@ const isCutFilled = (cut) => {
     cut.faceText !== '' ||
     (cut.drawingText || '') !== '' ||
     (cut.screenText || '') !== '' ||
-    cut.dialogueText !== '' ||
+    isDialogueLinesFilled(cut.dialogueLines || []) ||
     cut.timeValue !== '' ||
     cut.frameValue !== '' ||
     cut.blendFile !== ''
@@ -122,7 +110,8 @@ const flattenPagesToCuts = (pages) =>
       faceText: page.faceTexts[cIdx],
       drawingText: (page.drawingTexts || [])[cIdx] || '',
       screenText: (page.screenTexts || [])[cIdx] || '',
-      dialogueText: page.dialogueTexts[cIdx],
+      dialogueLines: getCutDialogueLines(page, cIdx),
+      dialogueText: formatDialogueDisplay(getCutDialogueLines(page, cIdx)),
       timeValue: page.timeValues[cIdx],
       frameValue: (page.frameValues || [])[cIdx] || '',
       frameRateBase: getCutFrameRate(page, cIdx),
@@ -177,79 +166,22 @@ const DialogueTimingButton = ({ onClick, disabled, mini = false }) => (
       lineHeight: 1.2,
       whiteSpace: 'nowrap'
     }}
-    title="セリフの文字数から尺を自動入力（「：」以降をカウント、fps文字=1秒=fpsコマ、空白除く）"
+    title="セリフ文字数から尺を自動入力（セリフ本文のみ・1秒あたり文字数は設定参照）"
   >
     {mini ? '自動' : 'セリフ→尺'}
   </button>
 );
 
-// セリフ入力欄（ホバーで全文を吹き出し表示）
-const DialogueTextarea = ({ value, onChange, placeholder, rows, textareaStyle }) => {
-  const [hovered, setHovered] = useState(false);
-  const text = value || '';
-  return (
-    <div
-      style={{ position: 'relative', flex: 1, minWidth: 0 }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      <textarea
-        value={value}
-        onChange={onChange}
-        placeholder={placeholder}
-        rows={rows}
-        style={{ ...textareaStyle, flex: undefined, width: '100%', boxSizing: 'border-box' }}
-      />
-      {hovered && text.trim() && (
-        <div
-          style={{
-            position: 'absolute',
-            bottom: 'calc(100% + 8px)',
-            left: 0,
-            zIndex: 3000,
-            maxWidth: '360px',
-            minWidth: '180px',
-            width: 'max-content',
-            background: '#1f2937',
-            color: '#fff',
-            padding: '10px 12px',
-            borderRadius: '8px',
-            fontSize: '13px',
-            lineHeight: 1.6,
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-            boxShadow: '0 6px 20px rgba(0,0,0,0.25)',
-            pointerEvents: 'none'
-          }}
-        >
-          {value}
-          <div
-            style={{
-              position: 'absolute',
-              top: '100%',
-              left: '18px',
-              width: 0,
-              height: 0,
-              borderLeft: '7px solid transparent',
-              borderRight: '7px solid transparent',
-              borderTop: '7px solid #1f2937'
-            }}
-          />
-        </div>
-      )}
-    </div>
-  );
-};
-
 const StoryboardViewer = ({ 
   storyboardId, 
   initialPages = [EMPTY_PAGE()], 
-  storyboardName: initialName = '' 
+  storyboardName: initialName = '',
+  initialDialogueCharsPerSecond = DEFAULT_DIALOGUE_CHARS_PER_SECOND
 }) => {
   const { user } = useAuth();
   const { saveStoryboard, saving, lastSaved } = useStoryboard();
   
-  const [pages, setPages] = useState(initialPages);
+  const [pages, setPages] = useState(() => (initialPages || [EMPTY_PAGE()]).map(normalizePage));
   const exportRef = useRef(null);
   const pageRefs = useRef([]);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -261,6 +193,7 @@ const StoryboardViewer = ({
   const [stopwatchStart, setStopwatchStart] = useState(null);
   const [stopwatchTime, setStopwatchTime] = useState(null);
   const [storyboardName, setStoryboardName] = useState(initialName);
+  const [dialogueCharsPerSecond, setDialogueCharsPerSecond] = useState(initialDialogueCharsPerSecond);
   const [draggedCut, setDraggedCut] = useState(null);
   const [isExportingPDF, setIsExportingPDF] = useState(false);
   const [areButtonsHidden, setAreButtonsHidden] = useState(false);
@@ -444,7 +377,7 @@ const StoryboardViewer = ({
   // 初期データの同期
   useEffect(() => {
     if (initialPages && initialPages.length > 0) {
-      setPages(initialPages);
+      setPages(initialPages.map(normalizePage));
     }
   }, [initialPages]);
 
@@ -455,15 +388,25 @@ const StoryboardViewer = ({
     }
   }, [initialName]);
 
+  useEffect(() => {
+    if (initialDialogueCharsPerSecond) {
+      setDialogueCharsPerSecond(initialDialogueCharsPerSecond);
+    }
+  }, [initialDialogueCharsPerSecond]);
+
   // ページデータまたは名前が変更されたら未保存フラグを立てる
   useEffect(() => {
     if (storyboardId && user && pages.length > 0) {
-      if (JSON.stringify(pages) === JSON.stringify(initialPages) && storyboardName === initialName) {
+      if (
+        JSON.stringify(pages) === JSON.stringify((initialPages || []).map(normalizePage)) &&
+        storyboardName === initialName &&
+        dialogueCharsPerSecond === initialDialogueCharsPerSecond
+      ) {
         return;
       }
       setHasUnsavedChanges(true);
     }
-  }, [pages, storyboardName]);
+  }, [pages, storyboardName, dialogueCharsPerSecond]);
 
   // スマホ・向き検知
   useEffect(() => {
@@ -482,9 +425,24 @@ const StoryboardViewer = ({
   // 手動保存ハンドラー
   const handleManualSave = () => {
     if (!storyboardId || !user) return;
-    saveStoryboard(storyboardId, pages, storyboardName);
+    saveStoryboard(storyboardId, pages, storyboardName, dialogueCharsPerSecond);
     setHasUnsavedChanges(false);
   };
+
+  const handleDialogueCharsPerSecondChange = (value) => {
+    if (value === '' || /^\d*\.?\d*$/.test(value)) {
+      setDialogueCharsPerSecond(value);
+    }
+  };
+
+  const resolvedCharsPerSecond = () => {
+    const n = parseFloat(dialogueCharsPerSecond);
+    return !isNaN(n) && n > 0 ? n : DEFAULT_DIALOGUE_CHARS_PER_SECOND;
+  };
+
+  const hasAnyDialogueText = pages.some((page) =>
+    (page.dialogueLines || []).some((lines) => countDialogueLinesChars(lines) > 0)
+  );
 
   // ページ・カット指定で画像アップロード（Firebase Storage版）
   const handleImageUpload = async (pageIdx, cutIdx, event, addNew = false) => {
@@ -653,13 +611,13 @@ const StoryboardViewer = ({
     });
   };
 
-  const handleDialogueChange = (pageIdx, cutIdx, value) => {
+  const handleDialogueLinesChange = (pageIdx, cutIdx, lines) => {
     setPages(prev => {
       const newPages = [...prev];
-      newPages[pageIdx] = {
-        ...newPages[pageIdx],
-        dialogueTexts: newPages[pageIdx].dialogueTexts.map((txt, idx) => idx === cutIdx ? value : txt)
-      };
+      const page = newPages[pageIdx];
+      const dialogueLines = [...(page.dialogueLines || emptyDialogueLinesForPage())];
+      dialogueLines[cutIdx] = lines;
+      newPages[pageIdx] = { ...page, dialogueLines };
       return newPages;
     });
   };
@@ -725,7 +683,12 @@ const StoryboardViewer = ({
   };
 
   const applyDialogueTimingToPage = (page, cutIdx) => {
-    const timing = calcTimingFromDialogue(page.dialogueTexts[cutIdx], getCutFrameRate(page, cutIdx));
+    const lines = getCutDialogueLines(page, cutIdx);
+    const timing = calcTimingFromDialogueLines(
+      lines,
+      getCutFrameRate(page, cutIdx),
+      resolvedCharsPerSecond()
+    );
     if (!timing) return page;
     return {
       ...page,
@@ -825,7 +788,8 @@ const StoryboardViewer = ({
         faceText: page.faceTexts[cutIdx],
         drawingText: (page.drawingTexts || [])[cutIdx] || '',
         screenText: (page.screenTexts || [])[cutIdx] || '',
-        dialogueText: page.dialogueTexts[cutIdx],
+        dialogueText: formatDialogueDisplay(getCutDialogueLines(page, cutIdx)),
+        dialogueLines: getCutDialogueLines(page, cutIdx),
         timeValue: page.timeValues[cutIdx],
         frameValue: (page.frameValues || [])[cutIdx] || '',
         frameRateBase: getCutFrameRate(page, cutIdx),
@@ -873,7 +837,7 @@ const StoryboardViewer = ({
     if (!isAutoSpeak) return;
     if (!window.speechSynthesis) return;
     if (!flatCuts[currentFrame]) return;
-    const text = (flatCuts[currentFrame].dialogueText || '').trim();
+    const text = formatDialogueSpeakText(flatCuts[currentFrame].dialogueLines || []).trim();
     if (!text) return;
 
     window.speechSynthesis.cancel();
@@ -1012,7 +976,7 @@ const StoryboardViewer = ({
 
   // JSONエクスポート
   const handleExport = () => {
-    const data = { name: storyboardName, pages: pages };
+    const data = { name: storyboardName, pages, dialogueCharsPerSecond: resolvedCharsPerSecond() };
     const dataStr = JSON.stringify(data, null, 2);
     const blob = new Blob([dataStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -1059,6 +1023,9 @@ const StoryboardViewer = ({
         if (imported.pages && Array.isArray(imported.pages)) {
           pagesData = imported.pages;
           setStoryboardName(imported.name || '');
+          if (imported.dialogueCharsPerSecond != null) {
+            setDialogueCharsPerSecond(imported.dialogueCharsPerSecond);
+          }
         } else if (Array.isArray(imported)) {
           pagesData = imported;
           setStoryboardName('');
@@ -1101,7 +1068,7 @@ const StoryboardViewer = ({
         faceTexts: group.map(c => c.faceText),
         drawingTexts: group.map(c => c.drawingText || ''),
         screenTexts: group.map(c => c.screenText || ''),
-        dialogueTexts: group.map(c => c.dialogueText),
+        dialogueLines: group.map(c => c.dialogueLines || [EMPTY_DIALOGUE_LINE()]),
         timeValues: group.map(c => c.timeValue),
         frameValues: group.map(c => c.frameValue || ''),
         frameRateBases: group.map(c => resolveFrameRate(c.frameRateBase)),
@@ -1225,13 +1192,65 @@ const StoryboardViewer = ({
     frameNumber: { position: 'absolute', top: '120px', left: '-60px', fontSize: '20px', color: '#374151', fontWeight: '500' },
     faceColumn: { borderRight: '1px solid #d1d5db', width: '120px', minWidth: '120px', maxWidth: '120px' },
     faceHeader: { width: '120px' },
-    faceContent: { padding: '9px 12px' },
-    faceInputRow: { marginBottom: '2px', height: '165px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'transparent' },
-    faceInput: { width: '100%', height: '40px', border: '1px solid #d1d5db', borderRadius: '4px', padding: '4px 8px', fontSize: '12px', resize: 'none', outline: 'none', fontFamily: 'inherit', marginBottom: '6px' },
+    faceContent: { padding: '20px 12px' },
+    faceInputRow: {
+      marginBottom: '16px',
+      height: '152px',
+      minHeight: '152px',
+      maxHeight: '152px',
+      overflow: 'hidden',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'stretch',
+      background: 'transparent',
+      boxSizing: 'border-box'
+    },
+    faceInputTop: {
+      flex: '1 1 50%',
+      minHeight: 0,
+      overflow: 'hidden',
+      boxSizing: 'border-box'
+    },
+    faceInputBottom: {
+      flex: '1 1 50%',
+      minHeight: 0,
+      overflow: 'hidden',
+      boxSizing: 'border-box',
+      borderTop: '1px solid #e5e7eb'
+    },
+    faceInput: {
+      width: '100%',
+      height: '100%',
+      minHeight: 0,
+      border: '1px solid #d1d5db',
+      borderRadius: '4px',
+      padding: '4px 6px',
+      fontSize: '12px',
+      lineHeight: 1.4,
+      resize: 'none',
+      outline: 'none',
+      fontFamily: 'inherit',
+      boxSizing: 'border-box',
+      overflow: 'auto',
+      display: 'block'
+    },
+    faceInputReadonly: {
+      width: '100%',
+      height: '100%',
+      minHeight: 0,
+      fontSize: '12px',
+      lineHeight: 1.4,
+      color: '#222',
+      padding: '4px 6px',
+      boxSizing: 'border-box',
+      overflow: 'auto',
+      whiteSpace: 'pre-wrap',
+      wordBreak: 'break-word'
+    },
     contentColumn: { flex: 1, borderRight: '1px solid #d1d5db' },
     timeColumn: { width: '92px', minWidth: '92px' },
-    timeContent: { padding: '16px 4px' },
-    timeInputRow: { marginBottom: '16px', height: '144px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '3px' },
+    timeContent: { padding: '20px 4px' },
+    timeInputRow: { marginBottom: '16px', height: '152px', minHeight: '152px', maxHeight: '152px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '3px' },
     timeInput: { width: '100%', height: '28px', border: '1px solid #d1d5db', borderRadius: '4px', padding: '4px 2px', fontSize: '11px', textAlign: 'center', outline: 'none', fontFamily: 'inherit' },
     frameInput: { width: '100%', height: '28px', border: '1px solid #d1d5db', borderRadius: '4px', padding: '4px 2px', fontSize: '11px', textAlign: 'center', outline: 'none', fontFamily: 'inherit', background: '#f8fafc' },
     timeFieldLabel: { fontSize: '9px', color: '#9ca3af', lineHeight: 1 },
@@ -1538,8 +1557,24 @@ const StoryboardViewer = ({
             ■ 停止
           </button>
 
+          <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: '#374151', whiteSpace: 'nowrap' }}>
+            1秒
+            <input
+              type="text"
+              value={dialogueCharsPerSecond}
+              onChange={(e) => handleDialogueCharsPerSecondChange(e.target.value)}
+              inputMode="decimal"
+              style={{
+                width: '36px', textAlign: 'center',
+                border: '1px solid #d1d5db', borderRadius: '4px',
+                padding: '2px 4px', fontSize: '12px', fontFamily: 'inherit'
+              }}
+            />
+            文字
+          </label>
+
           <DialogueTimingButton
-            disabled={!pages.some(p => p.dialogueTexts.some(t => countDialogueChars(t) > 0))}
+            disabled={!hasAnyDialogueText}
             onClick={handleApplyDialogueTimingAll}
           />
 
@@ -1865,43 +1900,13 @@ const StoryboardViewer = ({
                     }}
                   />
 
-                  <div style={{ display: 'flex', gap: '6px', marginTop: '6px', alignItems: 'flex-start' }}>
-                    <DialogueTextarea
-                      value={page.dialogueTexts[cutIdx]}
-                      onChange={(e) => handleDialogueChange(pageIdx, cutIdx, e.target.value)}
-                      placeholder="セリフ..."
-                      rows={2}
-                      textareaStyle={{
-                        flex: 1,
-                        border: '1px solid #e2e8f0', borderRadius: '6px',
-                        padding: '6px 10px', fontSize: '13px',
-                        resize: 'vertical', outline: 'none',
-                        fontFamily: 'inherit', lineHeight: 1.5,
-                        background: '#f8fafc',
-                        color: '#111',
-                        fontWeight: 600
-                      }}
+                  <div style={{ marginTop: '6px' }}>
+                    <CutDialogueEditor
+                      lines={getCutDialogueLines(page, cutIdx)}
+                      onChange={(lines) => handleDialogueLinesChange(pageIdx, cutIdx, lines)}
+                      onApplyTiming={() => handleApplyDialogueTiming(pageIdx, cutIdx)}
+                      canApplyTiming={countDialogueLinesChars(getCutDialogueLines(page, cutIdx)) > 0}
                     />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (window.speechSynthesis) {
-                          const utter = new window.SpeechSynthesisUtterance(page.dialogueTexts[cutIdx]);
-                          utter.lang = 'ja-JP';
-                          window.speechSynthesis.speak(utter);
-                        }
-                      }}
-                      style={{
-                        padding: '6px 8px',
-                        background: '#f1f5f9', border: '1px solid #e2e8f0',
-                        borderRadius: '6px', cursor: 'pointer',
-                        fontSize: '16px', lineHeight: 1,
-                        flexShrink: 0, marginTop: '1px'
-                      }}
-                      title="セリフを読み上げる"
-                    >
-                      🔊
-                    </button>
                   </div>
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }}>
@@ -1943,11 +1948,6 @@ const StoryboardViewer = ({
                       mini
                       value={getCutFrameRate(page, cutIdx)}
                       onChange={(fps) => handleFrameRateChange(pageIdx, cutIdx, fps)}
-                    />
-                    <DialogueTimingButton
-                      mini
-                      disabled={!countDialogueChars(page.dialogueTexts[cutIdx])}
-                      onClick={() => handleApplyDialogueTiming(pageIdx, cutIdx)}
                     />
                     {/* 順番移動ボタン */}
                     <div style={{ marginLeft: 'auto', display: 'flex', gap: '4px' }}>
@@ -2187,8 +2187,23 @@ const StoryboardViewer = ({
         >
           セリフMD出力
         </button>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: '#374151', whiteSpace: 'nowrap' }}>
+          1秒
+          <input
+            type="text"
+            value={dialogueCharsPerSecond}
+            onChange={(e) => handleDialogueCharsPerSecondChange(e.target.value)}
+            inputMode="decimal"
+            style={{
+              width: '36px', textAlign: 'center',
+              border: '1px solid #d1d5db', borderRadius: '4px',
+              padding: '2px 4px', fontSize: '12px', fontFamily: 'inherit'
+            }}
+          />
+          文字
+        </label>
         <DialogueTimingButton
-          disabled={!pages.some(p => p.dialogueTexts.some(t => countDialogueChars(t) > 0))}
+          disabled={!hasAnyDialogueText}
           onClick={handleApplyDialogueTimingAll}
         />
         <label style={{
@@ -2702,48 +2717,43 @@ const StoryboardViewer = ({
                   <div style={styles.faceContent}>
                     {[0, 1, 2, 3, 4].map((cutIdx) => (
                       <div key={cutIdx} style={styles.faceInputRow}>
-                        {isExportingPDF ? (
-                          <div style={{ width: '100%', minHeight: '40px', fontSize: '13px', color: '#222', background: 'none', border: 'none', padding: '4px 8px', marginBottom: '6px', whiteSpace: 'pre-line', wordBreak: 'break-word' }}>
-                            {contentMode === 'drawing'
-                              ? ((page.drawingTexts || [])[cutIdx] || <span style={{ color: '#bbb' }}>作画...</span>)
-                              : contentMode === 'screen'
-                              ? ((page.screenTexts || [])[cutIdx] || <span style={{ color: '#bbb' }}>画面作成タスク...</span>)
-                              : (page.faceTexts[cutIdx] || <span style={{ color: '#bbb' }}>内容...</span>)
-                            }
-                          </div>
-                        ) : (
-                          <textarea style={styles.faceInput}
-                            value={
-                              contentMode === 'drawing' ? ((page.drawingTexts || [])[cutIdx] || '')
-                              : contentMode === 'screen' ? ((page.screenTexts || [])[cutIdx] || '')
-                              : page.faceTexts[cutIdx]
-                            }
-                            onChange={(e) =>
-                              contentMode === 'drawing' ? handleDrawingChange(pageIdx, cutIdx, e.target.value)
-                              : contentMode === 'screen' ? handleScreenChange(pageIdx, cutIdx, e.target.value)
-                              : handleTextChange(pageIdx, cutIdx, e.target.value)
-                            }
-                            placeholder={contentMode === 'drawing' ? '作画...' : contentMode === 'screen' ? '画面作成タスク...' : '内容...'}
-                            rows={1} />
-                        )}
-                        <div style={{ display: 'flex', alignItems: 'center' }}>
+                        <div style={styles.faceInputTop}>
                           {isExportingPDF ? (
-                            <div style={{ width: '100%', minHeight: '40px', fontSize: '13px', color: '#374151', background: 'none', border: 'none', padding: '4px 8px', whiteSpace: 'pre-line', wordBreak: 'break-word' }}>
-                              {page.dialogueTexts[cutIdx] || <span style={{ color: '#bbb' }}>セリフ...</span>}
+                            <div style={styles.faceInputReadonly}>
+                              {contentMode === 'drawing'
+                                ? ((page.drawingTexts || [])[cutIdx] || <span style={{ color: '#bbb' }}>作画...</span>)
+                                : contentMode === 'screen'
+                                ? ((page.screenTexts || [])[cutIdx] || <span style={{ color: '#bbb' }}>画面作成タスク...</span>)
+                                : (page.faceTexts[cutIdx] || <span style={{ color: '#bbb' }}>内容...</span>)
+                              }
                             </div>
                           ) : (
-                            <>
-                              <DialogueTextarea
-                                textareaStyle={{ ...styles.faceInput, marginBottom: 0, flex: 1 }}
-                                value={page.dialogueTexts[cutIdx]}
-                                onChange={(e) => handleDialogueChange(pageIdx, cutIdx, e.target.value)}
-                                placeholder="セリフ..." rows={1} />
-                              <button type="button"
-                                onClick={() => { if (window.speechSynthesis) { const utter = new window.SpeechSynthesisUtterance(page.dialogueTexts[cutIdx]); utter.lang = 'ja-JP'; window.speechSynthesis.speak(utter); } }}
-                                style={{ marginLeft: '4px', background: '#f3f4f6', border: '1px solid #d1d5db', borderRadius: '3px', padding: '1px 2px', cursor: 'pointer', fontSize: '12px', color: '#374151', lineHeight: 1, minWidth: '22px', minHeight: '22px' }}
-                                title="セリフを読み上げる">🔊</button>
-                            </>
+                            <textarea
+                              style={styles.faceInput}
+                              value={
+                                contentMode === 'drawing' ? ((page.drawingTexts || [])[cutIdx] || '')
+                                : contentMode === 'screen' ? ((page.screenTexts || [])[cutIdx] || '')
+                                : page.faceTexts[cutIdx]
+                              }
+                              onChange={(e) =>
+                                contentMode === 'drawing' ? handleDrawingChange(pageIdx, cutIdx, e.target.value)
+                                : contentMode === 'screen' ? handleScreenChange(pageIdx, cutIdx, e.target.value)
+                                : handleTextChange(pageIdx, cutIdx, e.target.value)
+                              }
+                              placeholder={contentMode === 'drawing' ? '作画...' : contentMode === 'screen' ? '画面作成タスク...' : '内容...'}
+                            />
                           )}
+                        </div>
+                        <div style={styles.faceInputBottom}>
+                          <CutDialogueEditor
+                            compact
+                            fillHeight
+                            readOnly={isExportingPDF}
+                            lines={getCutDialogueLines(page, cutIdx)}
+                            onChange={(lines) => handleDialogueLinesChange(pageIdx, cutIdx, lines)}
+                            onApplyTiming={() => handleApplyDialogueTiming(pageIdx, cutIdx)}
+                            canApplyTiming={countDialogueLinesChars(getCutDialogueLines(page, cutIdx)) > 0}
+                          />
                         </div>
                       </div>
                     ))}
@@ -2773,11 +2783,6 @@ const StoryboardViewer = ({
                           value={(page.frameValues || [])[cutIdx] || ''}
                           onChange={(e) => handleFrameChange(pageIdx, cutIdx, e.target.value)}
                           placeholder="12" inputMode="numeric" />
-                        <DialogueTimingButton
-                          mini
-                          disabled={!countDialogueChars(page.dialogueTexts[cutIdx])}
-                          onClick={() => handleApplyDialogueTiming(pageIdx, cutIdx)}
-                        />
                       </div>
                     ))}
                   </div>
