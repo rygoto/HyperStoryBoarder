@@ -15,6 +15,16 @@ const sanitizeFileName = (name) => {
 
 const pad4 = (n) => String(n).padStart(4, '0');
 
+// ファイル名末尾に付けるファイルごとに異なる英字トークン。
+// DaVinci Resolve は「連番で並び、数字以外の部分が共通の画像ファイル」を
+// 1本のイメージシーケンス(動画)として自動でまとめてしまう。各ファイルの
+// 末尾を毎回違う英字にすることでこの連番検出を無効化し、各カットを
+// 個別の静止画として取り込ませる。
+const randToken = () =>
+  Array.from({ length: 6 }, () =>
+    String.fromCharCode(97 + Math.floor(Math.random() * 26))
+  ).join('');
+
 const ExportDavinciButton = ({ flatCuts, storyboardName }) => {
   const [exportName, setExportName] = useState('');
   const [isExporting, setIsExporting] = useState(false);
@@ -40,7 +50,7 @@ const ExportDavinciButton = ({ flatCuts, storyboardName }) => {
           setStatus(`画像を取得中... (${cutNumber}/${flatCuts.length})`);
           try {
             const { blob, ext } = await fetchImageAsBlob(cut.image);
-            const fileName = `${pad4(cutNumber)}.${ext}`;
+            const fileName = `${pad4(cutNumber)}_${randToken()}.${ext}`;
             imagesFolder.file(fileName, blob);
             items.push({ hasImage: true, fileName: `images/${fileName}`, seconds });
           } catch (e) {
