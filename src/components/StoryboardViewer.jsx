@@ -5,6 +5,7 @@ import AIAssistButton from './ai-assistant/AIAssistButton';
 import StoryboardAIPanel from './ai-assistant/StoryboardAIPanel';
 import { useAuth } from '../hooks/useAuth';
 import { useStoryboard } from '../hooks/useStoryboard';
+import { uploadImage } from '../services/storage-service';
 import CutDialogueEditor from './CutDialogueEditor';
 import {
   DEFAULT_DIALOGUE_CHARS_PER_SECOND,
