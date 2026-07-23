@@ -47,13 +47,13 @@ const StoryboardManager = () => {
     duplicateStoryboard,
     importFromJSON,
     watchStoryboard,
-    updateStoryboardGroup
+    updateStoryboardGroup,
+    saveStoryboard
   } = useStoryboard();
   
   const [selectedStoryboardId, setSelectedStoryboardId] = useState(null);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [newStoryboardName, setNewStoryboardName] = useState('');
-  const [importFile, setImportFile] = useState(null);
   
   // タブ（一覧 / グループ結合ビュー）
   const [activeTab, setActiveTab] = useState('list');
@@ -293,6 +293,9 @@ const StoryboardManager = () => {
           initialPages={currentStoryboard.pages}
           storyboardName={currentStoryboard.name}
           initialDialogueCharsPerSecond={currentStoryboard.dialogueCharsPerSecond ?? 5}
+          saveStoryboard={saveStoryboard}
+          saving={saving}
+          lastSaved={lastSaved}
         />
       </div>
     );

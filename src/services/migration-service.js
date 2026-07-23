@@ -1,4 +1,5 @@
 import { migrateBase64ToStorage, isBase64DataURL } from './storage-service';
+import { normalizeCutImages } from './storyboard-serialization';
 
 /**
  * localStorageから既存データを移行
@@ -72,10 +73,11 @@ const migrateBase64Images = async (pages, userId) => {
   let migratedImages = 0;
 
   for (const [pageIndex, page] of pages.entries()) {
-    const migratedPage = { ...page };
+    const migratedPage = { ...page, images: [] };
 
     // 各カットの画像を確認・移行
-    for (const [cutIndex, cutImages] of page.images.entries()) {
+    for (const [cutIndex, cutImageValue] of (page.images || []).entries()) {
+      const cutImages = normalizeCutImages(cutImageValue);
       const migratedCutImages = [];
 
       for (const [imageIndex, imageUrl] of cutImages.entries()) {
@@ -103,7 +105,7 @@ const migrateBase64Images = async (pages, userId) => {
         }
       }
 
-      migratedPage.images[cutIndex] = migratedCutImages;
+      migratedPage.images.push(migratedCutImages);
     }
 
     migratedPages.push(migratedPage);
@@ -130,7 +132,8 @@ export const checkMigrationData = () => {
       let base64ImageCount = 0;
       
       pages.forEach(page => {
-        page.images.forEach(cutImages => {
+        (page.images || []).forEach(cutImageValue => {
+          const cutImages = normalizeCutImages(cutImageValue);
           cutImages.forEach(imageUrl => {
             if (isBase64DataURL(imageUrl)) {
               base64ImageCount++;

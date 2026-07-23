@@ -5,42 +5,16 @@ import {
   onSnapshot,
   setDoc,
   getDoc,
-  getDocs,
   deleteDoc,
   query,
   orderBy,
-  serverTimestamp,
-  writeBatch
+  serverTimestamp
 } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { useAuth } from './useAuth';
+import { deserializePages, serializePages } from '../services/storyboard-serialization';
 
 const COLLECTION_NAME = 'storyboards';
-const DEBOUNCE_DELAY = 1000; // 1秒のデバウンス
-
-// Firestoreはネスト配列非サポートのため、images（配列の配列）をオブジェクト配列に変換
-const serializePages = (pages) => {
-  if (!Array.isArray(pages)) return pages;
-  return pages.map(page => ({
-    ...page,
-    images: Array.isArray(page.images)
-      ? page.images.map(imgArray => ({ urls: Array.isArray(imgArray) ? imgArray : [imgArray] }))
-      : page.images
-  }));
-};
-
-// Firestoreから読み込んだデータを元の形式に戻す
-const deserializePages = (pages) => {
-  if (!Array.isArray(pages)) return pages;
-  return pages.map(page => ({
-    ...page,
-    images: Array.isArray(page.images)
-      ? page.images.map(imgObj =>
-          Array.isArray(imgObj) ? imgObj : (imgObj?.urls || [null])
-        )
-      : page.images
-  }));
-};
 
 export const useStoryboard = () => {
   const { user } = useAuth();
@@ -51,8 +25,6 @@ export const useStoryboard = () => {
   const [error, setError] = useState(null);
   const [lastSaved, setLastSaved] = useState(null);
   
-  // デバウンス用のタイマー参照
-  const saveTimeoutRef = useRef(null);
   const unsubscribeRef = useRef(null);
 
   // ユーザーのストーリーボード一覧を監視
@@ -131,18 +103,23 @@ export const useStoryboard = () => {
   }, [user]);
 
   // 新しいストーリーボードを作成
-  const createStoryboard = useCallback(async (name, initialPages = []) => {
+  const createStoryboard = useCallback(async (
+    name,
+    initialPages = [],
+    dialogueCharsPerSecond = 5
+  ) => {
     if (!user) throw new Error('ユーザーがログインしていません');
 
     try {
       setSaving(true);
       const newId = `storyboard_${Date.now()}_${Math.random().toString(36).substring(2)}`;
       const docRef = doc(db, COLLECTION_NAME, user.uid, 'projects', newId);
+      const rate = parseFloat(dialogueCharsPerSecond);
       
       const storyboardData = {
         name: name || '新しい絵コンテ',
         pages: serializePages(initialPages),
-        dialogueCharsPerSecond: 5,
+        dialogueCharsPerSecond: !isNaN(rate) && rate > 0 ? rate : 5,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
         createdBy: user.uid,
@@ -164,54 +141,47 @@ export const useStoryboard = () => {
     }
   }, [user]);
 
-  // ストーリーボードを保存（デバウンス付き）
-  const saveStoryboard = useCallback((storyboardId, pages, name, dialogueCharsPerSecond) => {
-    if (!user || !storyboardId) return;
+  // 手動保存は即時実行し、呼び出し元が完了・失敗を判定できるようにする
+  const saveStoryboard = useCallback(async (storyboardId, pages, name, dialogueCharsPerSecond) => {
+    if (!user) throw new Error('ユーザーがログインしていません');
+    if (!storyboardId) throw new Error('保存先のストーリーボードが見つかりません');
 
-    // 既存のタイマーをクリア
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
-    }
+    try {
+      setSaving(true);
+      const docRef = doc(db, COLLECTION_NAME, user.uid, 'projects', storyboardId);
 
-    // デバウンス処理
-    saveTimeoutRef.current = setTimeout(async () => {
-      try {
-        setSaving(true);
-        const docRef = doc(db, COLLECTION_NAME, user.uid, 'projects', storyboardId);
-        
-        // 現在のバージョンを取得してインクリメント
-        const currentDoc = await getDoc(docRef);
-        const currentVersion = currentDoc.exists() ? (currentDoc.data().version || 1) : 1;
+      // 現在のバージョンを取得してインクリメント
+      const currentDoc = await getDoc(docRef);
+      const currentVersion = currentDoc.exists() ? (currentDoc.data().version || 1) : 1;
 
-        const updateData = {
-          pages: serializePages(pages),
-          updatedAt: serverTimestamp(),
-          version: currentVersion + 1
-        };
+      const updateData = {
+        pages: serializePages(pages),
+        updatedAt: serverTimestamp(),
+        version: currentVersion + 1
+      };
 
-        // 名前が指定されている場合は追加
-        if (name !== undefined) {
-          updateData.name = name;
-        }
-
-        if (dialogueCharsPerSecond !== undefined) {
-          const rate = parseFloat(dialogueCharsPerSecond);
-          updateData.dialogueCharsPerSecond = !isNaN(rate) && rate > 0 ? rate : 5;
-        }
-
-        await setDoc(docRef, updateData, { merge: true });
-        
-        console.log('ストーリーボード保存完了:', storyboardId);
-        setLastSaved(new Date());
-        setError(null);
-        
-      } catch (error) {
-        console.error('ストーリーボード保存エラー:', error);
-        setError(error.message);
-      } finally {
-        setSaving(false);
+      // 名前が指定されている場合は追加
+      if (name !== undefined) {
+        updateData.name = name;
       }
-    }, DEBOUNCE_DELAY);
+
+      if (dialogueCharsPerSecond !== undefined) {
+        const rate = parseFloat(dialogueCharsPerSecond);
+        updateData.dialogueCharsPerSecond = !isNaN(rate) && rate > 0 ? rate : 5;
+      }
+
+      await setDoc(docRef, updateData, { merge: true });
+
+      console.log('ストーリーボード保存完了:', storyboardId);
+      setLastSaved(new Date());
+      setError(null);
+    } catch (error) {
+      console.error('ストーリーボード保存エラー:', error);
+      setError(error.message);
+      throw error;
+    } finally {
+      setSaving(false);
+    }
   }, [user]);
 
   // ストーリーボードを削除
@@ -287,7 +257,8 @@ export const useStoryboard = () => {
       const sourceData = sourceDoc.data();
       const newId = await createStoryboard(
         newName || `${sourceData.name}のコピー`,
-        deserializePages(sourceData.pages)
+        deserializePages(sourceData.pages),
+        sourceData.dialogueCharsPerSecond
       );
       
       console.log('ストーリーボード複製完了:', newId);
@@ -315,7 +286,11 @@ export const useStoryboard = () => {
       }
 
       const name = storyboardName || jsonData.name || 'インポートされた絵コンテ';
-      const newId = await createStoryboard(name, jsonData.pages);
+      const newId = await createStoryboard(
+        name,
+        jsonData.pages,
+        jsonData.dialogueCharsPerSecond
+      );
       
       console.log('JSONインポート完了:', newId);
       return newId;
@@ -332,9 +307,6 @@ export const useStoryboard = () => {
   // クリーンアップ
   useEffect(() => {
     return () => {
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-      }
       if (unsubscribeRef.current) {
         unsubscribeRef.current();
       }
@@ -360,7 +332,6 @@ export const useStoryboard = () => {
     updateStoryboardGroup,
     
     // Utils
-    isConnected: !error,
-    hasUnsavedChanges: !!saveTimeoutRef.current
+    isConnected: !error
   };
 };

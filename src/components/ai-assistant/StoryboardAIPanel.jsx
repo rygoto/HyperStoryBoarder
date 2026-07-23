@@ -11,8 +11,7 @@ const StoryboardAIPanel = ({
   selectedFrame,
   pages,
   onClose,
-  onFrameGenerated, // eslint-disable-line no-unused-vars
-  onFrameUpdated    // eslint-disable-line no-unused-vars
+  onFrameGenerated
 }) => {
   const [currentStep, setCurrentStep] = useState('analyzing');
   const [situationAnalysis, setSituationAnalysis] = useState(null);
