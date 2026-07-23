@@ -4,7 +4,6 @@ import ExportDavinciButton from './ExportDavinciButton';
 import AIAssistButton from './ai-assistant/AIAssistButton';
 import StoryboardAIPanel from './ai-assistant/StoryboardAIPanel';
 import { useAuth } from '../hooks/useAuth';
-import { useStoryboard } from '../hooks/useStoryboard';
 import { uploadImage } from '../services/storage-service';
 import CutDialogueEditor from './CutDialogueEditor';
 import {
@@ -177,10 +176,12 @@ const StoryboardViewer = ({
   storyboardId, 
   initialPages = [EMPTY_PAGE()], 
   storyboardName: initialName = '',
-  initialDialogueCharsPerSecond = DEFAULT_DIALOGUE_CHARS_PER_SECOND
+  initialDialogueCharsPerSecond = DEFAULT_DIALOGUE_CHARS_PER_SECOND,
+  saveStoryboard,
+  saving,
+  lastSaved
 }) => {
   const { user } = useAuth();
-  const { saveStoryboard, saving, lastSaved } = useStoryboard();
   
   const [pages, setPages] = useState(() => (initialPages || [EMPTY_PAGE()]).map(normalizePage));
   const exportRef = useRef(null);
@@ -205,7 +206,7 @@ const StoryboardViewer = ({
 
   // Firebase Storage関連のstate
   const [uploadingImages, setUploadingImages] = useState(new Set());
-  const [imageUploadProgress, setImageUploadProgress] = useState({});
+  const [, setImageUploadProgress] = useState({});
 
   // 内容/作画 モード切り替え
   const [contentMode, setContentMode] = useState('content'); // 'content' | 'drawing'
@@ -319,7 +320,7 @@ const StoryboardViewer = ({
         const dataURL = canvas.toDataURL('image/png');
         lineArtCacheRef.current[cacheKey] = dataURL;
         setLineArtCache(prev => ({ ...prev, [cacheKey]: dataURL }));
-      } catch(e) {
+      } catch {
         // getImageData失敗（tainted canvas）→ CSSフィルター代替
         setCssFallback();
       }
@@ -358,6 +359,12 @@ const StoryboardViewer = ({
 
   // 未保存変更の追跡
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const lastRemoteDataRef = useRef({
+    pages: initialPages,
+    name: initialName,
+    dialogueCharsPerSecond: initialDialogueCharsPerSecond
+  });
+  const applyingRemoteDataRef = useRef(false);
 
   // スマホ・向き判定
   // screen.width/height は向きに関係ない物理サイズなので、横向き時も正しくスマホ判定できる
@@ -367,7 +374,7 @@ const StoryboardViewer = ({
     return narrowSide < 768;
   };
   const [isMobile, setIsMobile] = useState(checkIsMobile);
-  const [isPortrait, setIsPortrait] = useState(() =>
+  const [, setIsPortrait] = useState(() =>
     typeof window !== 'undefined' && window.innerHeight > window.innerWidth
   );
 
@@ -375,39 +382,68 @@ const StoryboardViewer = ({
   const [longPressTarget, setLongPressTarget] = useState(null);
   const longPressTimer = useRef(null);
 
-  // 初期データの同期
+  // Firestore更新は未保存のローカル編集を上書きしない場合のみ反映する
   useEffect(() => {
-    if (initialPages && initialPages.length > 0) {
+    const previous = lastRemoteDataRef.current;
+    const remoteDataChanged =
+      previous.pages !== initialPages ||
+      previous.name !== initialName ||
+      previous.dialogueCharsPerSecond !== initialDialogueCharsPerSecond;
+
+    if (!remoteDataChanged) return;
+
+    lastRemoteDataRef.current = {
+      pages: initialPages,
+      name: initialName,
+      dialogueCharsPerSecond: initialDialogueCharsPerSecond
+    };
+
+    if (!hasUnsavedChanges && initialPages && initialPages.length > 0) {
+      applyingRemoteDataRef.current = true;
       setPages(initialPages.map(normalizePage));
-    }
-  }, [initialPages]);
-
-  // ストーリーボード名の同期
-  useEffect(() => {
-    if (initialName) {
       setStoryboardName(initialName);
-    }
-  }, [initialName]);
-
-  useEffect(() => {
-    if (initialDialogueCharsPerSecond) {
       setDialogueCharsPerSecond(initialDialogueCharsPerSecond);
     }
-  }, [initialDialogueCharsPerSecond]);
+  }, [
+    hasUnsavedChanges,
+    initialDialogueCharsPerSecond,
+    initialName,
+    initialPages
+  ]);
 
   // ページデータまたは名前が変更されたら未保存フラグを立てる
   useEffect(() => {
-    if (storyboardId && user && pages.length > 0) {
-      if (
-        JSON.stringify(pages) === JSON.stringify((initialPages || []).map(normalizePage)) &&
-        storyboardName === initialName &&
-        dialogueCharsPerSecond === initialDialogueCharsPerSecond
-      ) {
-        return;
-      }
-      setHasUnsavedChanges(true);
+    if (applyingRemoteDataRef.current) {
+      applyingRemoteDataRef.current = false;
+      return;
     }
-  }, [pages, storyboardName, dialogueCharsPerSecond]);
+
+    if (!storyboardId || !user || pages.length === 0) return;
+
+    const currentRate = parseFloat(dialogueCharsPerSecond);
+    const initialRate = parseFloat(initialDialogueCharsPerSecond);
+    const normalizedCurrentRate = !isNaN(currentRate) && currentRate > 0
+      ? currentRate
+      : DEFAULT_DIALOGUE_CHARS_PER_SECOND;
+    const normalizedInitialRate = !isNaN(initialRate) && initialRate > 0
+      ? initialRate
+      : DEFAULT_DIALOGUE_CHARS_PER_SECOND;
+    const matchesRemote =
+      JSON.stringify(pages) === JSON.stringify((initialPages || []).map(normalizePage)) &&
+      storyboardName === initialName &&
+      normalizedCurrentRate === normalizedInitialRate;
+
+    setHasUnsavedChanges(!matchesRemote);
+  }, [
+    dialogueCharsPerSecond,
+    initialDialogueCharsPerSecond,
+    initialName,
+    initialPages,
+    pages,
+    storyboardId,
+    storyboardName,
+    user
+  ]);
 
   // スマホ・向き検知
   useEffect(() => {
@@ -424,10 +460,14 @@ const StoryboardViewer = ({
   }, []);
 
   // 手動保存ハンドラー
-  const handleManualSave = () => {
+  const handleManualSave = async () => {
     if (!storyboardId || !user) return;
-    saveStoryboard(storyboardId, pages, storyboardName, dialogueCharsPerSecond);
-    setHasUnsavedChanges(false);
+    try {
+      await saveStoryboard(storyboardId, pages, storyboardName, dialogueCharsPerSecond);
+      setHasUnsavedChanges(false);
+    } catch (error) {
+      alert(`保存に失敗しました: ${error.message}`);
+    }
   };
 
   const handleDialogueCharsPerSecondChange = (value) => {
@@ -885,45 +925,6 @@ const StoryboardViewer = ({
   // ページ追加
   const handleAddPage = () => {
     setPages(prev => [...prev, EMPTY_PAGE()]);
-  };
-
-  // localStorage保存
-  const handleSave = () => {
-    try {
-      localStorage.setItem('storyboardPages', JSON.stringify(pages));
-      alert('保存しました！');
-    } catch (e) {
-      alert('保存に失敗しました');
-    }
-  };
-
-  // localStorageから復元
-  const handleLoad = () => {
-    try {
-      const data = localStorage.getItem('storyboardPages');
-      if (data) {
-        const loadedPages = JSON.parse(data);
-        const convertedPages = loadedPages.map(page => {
-          if (page.images && Array.isArray(page.images) && page.images.length > 0) {
-            const isOldFormat = !Array.isArray(page.images[0]);
-            if (isOldFormat) {
-              return normalizePage({
-                ...page,
-                images: page.images.map(img => [img]),
-                imageIndices: page.imageIndices || [0, 0, 0, 0, 0]
-              });
-            }
-          }
-          return normalizePage({ ...page, imageIndices: page.imageIndices || [0, 0, 0, 0, 0] });
-        });
-        setPages(convertedPages);
-        alert('読み込みました！');
-      } else {
-        alert('保存データがありません');
-      }
-    } catch (e) {
-      alert('読み込みに失敗しました');
-    }
   };
 
   // ストップウォッチ
@@ -2016,7 +2017,6 @@ const StoryboardViewer = ({
           pages={pages}
           onClose={() => setAiPanelVisible(false)}
           onFrameGenerated={handleAIFrameGenerated}
-          onFrameUpdated={() => {}}
         />
       </div>
     );
@@ -2808,7 +2808,6 @@ const StoryboardViewer = ({
         pages={pages}
         onClose={() => setAiPanelVisible(false)}
         onFrameGenerated={handleAIFrameGenerated}
-        onFrameUpdated={() => {}}
       />
     </div>
   );

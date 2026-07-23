@@ -89,7 +89,7 @@ const DialogueInterface = ({
     } finally {
       setIsThinking(false);
     }
-  }, [availableFeatures.dialogue, aiService, situationAnalysis, chatHistory]);
+  }, [availableFeatures.dialogue, aiService, situationAnalysis, chatHistory, setChatHistory]);
 
   // プリセットメッセージ追加用のコールバック
   useEffect(() => {

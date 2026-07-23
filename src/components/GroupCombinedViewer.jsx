@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { formatDialogueDisplay, getCutDialogueLines } from '../utils/dialogue';
 
 const GROUP_LABELS = ['A', 'B', 'C', 'D', 'E'];
@@ -335,7 +335,7 @@ const StoryboardSection = ({ storyboard, onOpen, startPageIndex, isMobile, curre
           <div style={{ padding: isMobile ? '8px 12px' : '12px 16px', borderBottom: '1px solid #c8dff8', backgroundColor: 'white', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={{ fontWeight: '600', color: '#374151', fontSize: '14px' }}>{storyboard.name}</span>
             <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-              {isMobile ? `${storyboard.pages?.length || 0}ページ` : `グループ ${storyboard.group}　番号 ${storyboard.order}`}
+              {isMobile ? `${storyboard.pages?.length || 0}ページ` : `グループ ${storyboard.group} 番号 ${storyboard.order}`}
             </span>
           </div>
 
@@ -515,7 +515,10 @@ const GroupCombinedViewer = ({ storyboards, onOpenStoryboard }) => {
 
   const activeGroups = GROUP_LABELS.filter(g => groupedStoryboards[g].length > 0);
   const currentGroup = (selectedGroup && activeGroups.includes(selectedGroup)) ? selectedGroup : activeGroups[0] ?? null;
-  const currentStoryboards = currentGroup ? groupedStoryboards[currentGroup] : [];
+  const currentStoryboards = useMemo(
+    () => currentGroup ? groupedStoryboards[currentGroup] : [],
+    [currentGroup, groupedStoryboards]
+  );
 
   // ページオフセット・カットオフセットを両方計算
   const { pageOffsets, cutOffsets } = useMemo(() => {
@@ -535,7 +538,7 @@ const GroupCombinedViewer = ({ storyboards, onOpenStoryboard }) => {
   // グループの全カットをフラット化（再生用）
   const flatCuts = useMemo(() =>
     currentStoryboards.flatMap(sb =>
-      (sb.pages ?? []).flatMap((page, pageIdx) =>
+      (sb.pages ?? []).flatMap((page) =>
         Array.from({ length: 5 }, (_, cutIdx) => {
           const currentIdx = page.imageIndices?.[cutIdx] ?? 0;
           const cutImages = page.images?.[cutIdx];
@@ -629,6 +632,9 @@ const GroupCombinedViewer = ({ storyboards, onOpenStoryboard }) => {
   }, [isDesktopFullscreen]);
 
   const currentCut = flatCuts[currentFrame];
+  const handleToggleFullscreen = useCallback(() => {
+    setIsDesktopFullscreen(prev => !prev);
+  }, []);
 
   if (activeGroups.length === 0) {
     return (
@@ -642,10 +648,6 @@ const GroupCombinedViewer = ({ storyboards, onOpenStoryboard }) => {
       </div>
     );
   }
-
-  const handleToggleFullscreen = useCallback(() => {
-    setIsDesktopFullscreen(prev => !prev);
-  }, []);
 
   return (
     <div>
@@ -787,7 +789,7 @@ const GroupCombinedViewer = ({ storyboards, onOpenStoryboard }) => {
             background: 'rgba(0,0,0,0.6)', color: 'white',
             padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 600
           }}>
-            {currentCut.sbGroup}-{currentCut.sbOrder}　{currentFrame + 1}/{totalCuts}
+            {currentCut.sbGroup}-{currentCut.sbOrder} {currentFrame + 1}/{totalCuts}
           </div>
 
           {/* セリフ */}
